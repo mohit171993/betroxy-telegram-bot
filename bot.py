@@ -78,7 +78,7 @@ PRIVACY_TEXT = (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-WELCOME_BANNER = BASE_DIR / "assets" / "welcome_banner.jpg"
+WELCOME_BANNER = BASE_DIR / "welcome_banner.jpg"
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
