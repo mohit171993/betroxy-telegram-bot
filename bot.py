@@ -15,75 +15,108 @@ from telegram.ext import (
 )
 
 # ============================================================
-# BETROXY OFFICIAL BOT — PROMOTION / MARKETING FUNNEL
+# BETROXY OFFICIAL BOT
+# Promotion / Discovery / Support Bot
 # @betroxyofficialbot
-#
-# Actual play/product bot:
-# @betroxybot
 # ============================================================
 
 BRAND_NAME = "Betroxy"
 
-PLAY_BOT_URL = os.getenv("PLAY_BOT_URL", "https://t.me/betroxybot")
-WEBSITE_URL = os.getenv("WEBSITE_URL", "https://www.betroxy.com")
-SUPPORT_HANDLE = os.getenv("SUPPORT_HANDLE", "@betroxysports")
-SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/betroxysports")
-CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/betroxycasino")
+# ------------------------------------------------------------
+# Core destinations
+# ------------------------------------------------------------
 
-PROMOTIONS_URL = os.getenv("PROMOTIONS_URL", WEBSITE_URL)
-WELCOME_OFFER_URL = os.getenv("WELCOME_OFFER_URL", PROMOTIONS_URL)
-SPORTS_PROMO_URL = os.getenv("SPORTS_PROMO_URL", PROMOTIONS_URL)
-CASINO_PROMO_URL = os.getenv("CASINO_PROMO_URL", PROMOTIONS_URL)
-VIP_URL = os.getenv("VIP_URL", WEBSITE_URL)
-LIMITED_OFFER_URL = os.getenv("LIMITED_OFFER_URL", PROMOTIONS_URL)
+PLAY_BOT_URL = "https://t.me/BetroxyBot"
 
+CASINO_URL = "https://t.me/BetroxyBot/casino"
+SPORTSBOOK_URL = "https://t.me/BetroxyBot/sportsbook"
+EXCHANGE_URL = "https://t.me/BetroxyBot/exchange"
+POPULAR_GAMES_URL = "https://t.me/BetroxyBot/populargames"
+CRASH_GAMES_URL = "https://t.me/BetroxyBot/crashgames"
+
+PROMOTIONS_URL = "https://betroxy.com/promotions"
+VIP_URL = "https://betroxy.com/vip-club"
+RESPONSIBLE_URL = "https://betroxy.com/responsible-gambling"
+
+UPDATES_URL = "https://t.me/betroxycasino"
+TELEGRAM_SUPPORT_URL = "https://t.me/betroxysports"
+
+WHATSAPP_SUPPORT_URL = (
+    "https://api.whatsapp.com/send/"
+    "?phone=447777352382"
+    "&text=Hi%2C+I+need+support"
+    "&type=phone_number"
+    "&app_absent=0"
+)
+
+WEBSITE_URL = "https://www.betroxy.com"
+
+# Optional legal links can be added later in Railway Variables
 TERMS_URL = os.getenv("TERMS_URL", "")
 PRIVACY_URL = os.getenv("PRIVACY_URL", "")
 
+# ------------------------------------------------------------
+# Optional banners in GitHub root
+# ------------------------------------------------------------
+
 BASE_DIR = Path(__file__).resolve().parent
+
 WELCOME_BANNER = BASE_DIR / "welcome_banner.jpg"
 PROMOTION_BANNER = BASE_DIR / "promotion_banner.png"
 NEWS_BANNER = BASE_DIR / "news_banner.png"
 
+# ============================================================
+# TEXT
+# ============================================================
+
 WELCOME_TEXT = (
-    "👑 <b>Welcome to Betroxy</b>\n\n"
-    "Get the latest promotions, updates and official support.\n\n"
-    "Ready to play? Open the Betroxy play bot below 👇"
+    "👑 <b>Welcome to Betroxy Official</b>\n\n"
+    "Discover games, promotions, VIP rewards, latest updates "
+    "and official support.\n\n"
+    "Choose an option below 👇"
 )
 
-PROMOTIONS_TEXT = (
+PROMOTION_TEXT = (
     "🎁 <b>Betroxy Promotions</b>\n\n"
-    "Discover the latest rewards, special offers and limited-time promotions.\n\n"
-    "Choose a category below 👇"
+    "Discover the latest offers, rewards and special promotions.\n\n"
+    "Choose an option below 👇"
 )
 
 UPDATES_TEXT = (
     "📢 <b>Betroxy Latest Updates</b>\n\n"
-    "Stay informed about promotions, announcements and important platform updates."
+    "Stay informed about promotions, announcements and "
+    "important platform updates."
 )
 
 SUPPORT_TEXT = (
     "💬 <b>Betroxy Support</b>\n\n"
-    f"For personal assistance, contact official support at <b>{SUPPORT_HANDLE}</b>."
+    "Choose your preferred support channel below."
 )
 
 HELP_TEXT = (
     "❓ <b>Help & FAQ</b>\n\n"
     "<b>Where do I play?</b>\n"
-    "Use the 🎮 Play on Betroxy button to open @betroxybot.\n\n"
-    "<b>Where can I see promotions?</b>\n"
-    "Open 🎁 Promotions from the main menu.\n\n"
+    "Use 🎮 Play on Betroxy or choose Casino, Sportsbook, "
+    "Exchange, Popular Games or Crash Games.\n\n"
+    "<b>Where are the promotions?</b>\n"
+    "Tap 🎁 Promotions.\n\n"
+    "<b>Where can I see VIP benefits?</b>\n"
+    "Tap 👑 VIP Club.\n\n"
     "<b>How do I get support?</b>\n"
-    f"Contact {SUPPORT_HANDLE}.\n\n"
-    "<b>How do I receive updates?</b>\n"
-    "Join the official Betroxy updates channel."
+    "Tap 💬 Support and choose Telegram or WhatsApp.\n\n"
+    "<b>Where do I get updates?</b>\n"
+    "Tap 📢 Latest Updates."
 )
 
 FALLBACK_TEXT = (
-    "I can help with Betroxy promotions, updates, support and general navigation.\n\n"
-    "To play, use the 🎮 Play on Betroxy button."
+    "I can help you find Betroxy games, promotions, VIP, "
+    "updates and support.\n\n"
+    "Choose an option below 👇"
 )
 
+# ============================================================
+# MENUS
+# ============================================================
 
 def main_menu():
     return InlineKeyboardMarkup([
@@ -95,8 +128,38 @@ def main_menu():
         ],
         [
             InlineKeyboardButton(
+                "🎰 Casino",
+                url=CASINO_URL
+            ),
+            InlineKeyboardButton(
+                "⚽ Sportsbook",
+                url=SPORTSBOOK_URL
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🔄 Exchange",
+                url=EXCHANGE_URL
+            ),
+            InlineKeyboardButton(
+                "🔥 Popular Games",
+                url=POPULAR_GAMES_URL
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🚀 Crash Games",
+                url=CRASH_GAMES_URL
+            ),
+            InlineKeyboardButton(
                 "🎁 Promotions",
                 callback_data="promotions"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "👑 VIP Club",
+                url=VIP_URL
             ),
             InlineKeyboardButton(
                 "📢 Latest Updates",
@@ -109,25 +172,15 @@ def main_menu():
                 callback_data="support"
             ),
             InlineKeyboardButton(
+                "🛡 Responsible Play",
+                url=RESPONSIBLE_URL
+            ),
+        ],
+        [
+            InlineKeyboardButton(
                 "❓ Help & FAQ",
                 callback_data="faq"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "🌐 Website",
-                url=WEBSITE_URL
             )
-        ],
-        [
-            InlineKeyboardButton(
-                "📄 Terms",
-                callback_data="terms"
-            ),
-            InlineKeyboardButton(
-                "🔒 Privacy",
-                callback_data="privacy"
-            ),
         ],
     ])
 
@@ -136,36 +189,14 @@ def promotions_menu():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "🎁 Welcome Offer",
-                url=WELCOME_OFFER_URL
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⚽ Sports Promotions",
-                url=SPORTS_PROMO_URL
-            ),
-            InlineKeyboardButton(
-                "🎰 Casino Promotions",
-                url=CASINO_PROMO_URL
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "👑 VIP Rewards",
-                url=VIP_URL
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⏳ Limited-Time Offers",
-                url=LIMITED_OFFER_URL
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🌐 View All Promotions",
+                "🎁 View Promotions",
                 url=PROMOTIONS_URL
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "👑 VIP Club",
+                url=VIP_URL
             )
         ],
         [
@@ -188,7 +219,7 @@ def updates_menu():
         [
             InlineKeyboardButton(
                 "📢 Join Official Updates",
-                url=CHANNEL_URL
+                url=UPDATES_URL
             )
         ],
         [
@@ -210,14 +241,20 @@ def support_menu():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "💬 Chat with Support",
-                url=SUPPORT_URL
+                "💬 Telegram Support",
+                url=TELEGRAM_SUPPORT_URL
             )
         ],
         [
             InlineKeyboardButton(
-                "🎮 Play on Betroxy",
-                url=PLAY_BOT_URL
+                "🟢 WhatsApp Support",
+                url=WHATSAPP_SUPPORT_URL
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🛡 Responsible Play",
+                url=RESPONSIBLE_URL
             )
         ],
         [
@@ -230,7 +267,7 @@ def support_menu():
 
 
 def help_menu():
-    return InlineKeyboardMarkup([
+    rows = [
         [
             InlineKeyboardButton(
                 "🎮 Play on Betroxy",
@@ -239,49 +276,49 @@ def help_menu():
         ],
         [
             InlineKeyboardButton(
-                "💬 Contact Support",
-                url=SUPPORT_URL
+                "🎁 Promotions",
+                url=PROMOTIONS_URL
+            ),
+            InlineKeyboardButton(
+                "👑 VIP Club",
+                url=VIP_URL
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "💬 Support",
+                callback_data="support"
             )
         ],
         [
             InlineKeyboardButton(
                 "📢 Latest Updates",
-                url=CHANNEL_URL
+                url=UPDATES_URL
             )
         ],
         [
             InlineKeyboardButton(
-                "⬅️ Back to Main Menu",
-                callback_data="home"
+                "🛡 Responsible Play",
+                url=RESPONSIBLE_URL
             )
         ],
-    ])
+    ]
 
-
-def legal_menu(kind):
-    if kind == "terms":
-        url = TERMS_URL
-        label = "📄 Open Terms & Conditions"
-    else:
-        url = PRIVACY_URL
-        label = "🔒 Open Privacy Policy"
-
-    rows = []
-
-    if url:
+    if TERMS_URL:
         rows.append([
             InlineKeyboardButton(
-                label,
-                url=url
+                "📄 Terms & Conditions",
+                url=TERMS_URL
             )
         ])
 
-    rows.append([
-        InlineKeyboardButton(
-            "💬 Contact Support",
-            url=SUPPORT_URL
-        )
-    ])
+    if PRIVACY_URL:
+        rows.append([
+            InlineKeyboardButton(
+                "🔒 Privacy Policy",
+                url=PRIVACY_URL
+            )
+        ])
 
     rows.append([
         InlineKeyboardButton(
@@ -292,6 +329,10 @@ def legal_menu(kind):
 
     return InlineKeyboardMarkup(rows)
 
+
+# ============================================================
+# HELPERS
+# ============================================================
 
 def normalize(text):
     return re.sub(
@@ -331,6 +372,10 @@ async def send_photo_or_text(
         )
 
 
+# ============================================================
+# COMMANDS
+# ============================================================
+
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
@@ -355,6 +400,10 @@ async def help_command(
     )
 
 
+# ============================================================
+# BUTTON HANDLER
+# ============================================================
+
 async def button_handler(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
@@ -375,7 +424,7 @@ async def button_handler(
         await send_photo_or_text(
             query.message,
             PROMOTION_BANNER,
-            PROMOTIONS_TEXT,
+            PROMOTION_TEXT,
             promotions_menu()
         )
         return
@@ -407,47 +456,10 @@ async def button_handler(
         )
         return
 
-    if query.data == "terms":
-        if TERMS_URL:
-            text = (
-                "📄 <b>Terms & Conditions</b>\n\n"
-                "Use the button below to review the official "
-                "Betroxy Terms & Conditions."
-            )
-        else:
-            text = (
-                "📄 <b>Terms & Conditions</b>\n\n"
-                "The official Terms link has not been configured yet."
-            )
 
-        await query.message.reply_text(
-            text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=legal_menu("terms"),
-            disable_web_page_preview=True,
-        )
-        return
-
-    if query.data == "privacy":
-        if PRIVACY_URL:
-            text = (
-                "🔒 <b>Privacy Policy</b>\n\n"
-                "Use the button below to review the official "
-                "Betroxy Privacy Policy."
-            )
-        else:
-            text = (
-                "🔒 <b>Privacy Policy</b>\n\n"
-                "The official Privacy Policy link has not been configured yet."
-            )
-
-        await query.message.reply_text(
-            text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=legal_menu("privacy"),
-            disable_web_page_preview=True,
-        )
-
+# ============================================================
+# FREE-TEXT CHAT
+# ============================================================
 
 def detect_reply(user_text):
     text = normalize(user_text)
@@ -463,31 +475,114 @@ def detect_reply(user_text):
     }:
         return (
             "👋 <b>Hello!</b>\n\n"
-            "Welcome to Betroxy. What would you like to do?",
+            "Welcome to Betroxy Official. What would you like to explore?",
             main_menu(),
         )
 
     if contains_any(
         text,
-        [
-            "play",
-            "bet",
-            "casino",
-            "sportsbook",
-            "exchange",
-            "game",
-            "games",
-        ]
+        ["casino"]
     ):
         return (
-            "🎮 <b>Play on Betroxy</b>\n\n"
-            "Open the Betroxy play bot to access Casino, "
-            "Sportsbook and Exchange.",
+            "🎰 <b>Betroxy Casino</b>\n\n"
+            "Open Casino directly inside Telegram.",
             InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton(
-                        "🎮 Open @betroxybot",
-                        url=PLAY_BOT_URL
+                        "🎰 Open Casino",
+                        url=CASINO_URL
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Main Menu",
+                        callback_data="home"
+                    )
+                ],
+            ]),
+        )
+
+    if contains_any(
+        text,
+        ["sportsbook", "sports book", "sports"]
+    ):
+        return (
+            "⚽ <b>Betroxy Sportsbook</b>\n\n"
+            "Open Sportsbook directly inside Telegram.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "⚽ Open Sportsbook",
+                        url=SPORTSBOOK_URL
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Main Menu",
+                        callback_data="home"
+                    )
+                ],
+            ]),
+        )
+
+    if contains_any(
+        text,
+        ["exchange"]
+    ):
+        return (
+            "🔄 <b>Betroxy Exchange</b>\n\n"
+            "Open Exchange directly inside Telegram.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🔄 Open Exchange",
+                        url=EXCHANGE_URL
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Main Menu",
+                        callback_data="home"
+                    )
+                ],
+            ]),
+        )
+
+    if contains_any(
+        text,
+        ["popular", "popular games"]
+    ):
+        return (
+            "🔥 <b>Popular Games</b>\n\n"
+            "Open Betroxy Popular Games directly inside Telegram.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🔥 Open Popular Games",
+                        url=POPULAR_GAMES_URL
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Main Menu",
+                        callback_data="home"
+                    )
+                ],
+            ]),
+        )
+
+    if contains_any(
+        text,
+        ["crash", "crash games"]
+    ):
+        return (
+            "🚀 <b>Crash Games</b>\n\n"
+            "Open Betroxy Crash Games directly inside Telegram.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🚀 Open Crash Games",
+                        url=CRASH_GAMES_URL
                     )
                 ],
                 [
@@ -509,12 +604,34 @@ def detect_reply(user_text):
             "bonus",
             "reward",
             "rewards",
-            "vip",
         ]
     ):
         return (
-            PROMOTIONS_TEXT,
+            PROMOTION_TEXT,
             promotions_menu()
+        )
+
+    if contains_any(
+        text,
+        ["vip", "vip club"]
+    ):
+        return (
+            "👑 <b>Betroxy VIP Club</b>\n\n"
+            "Explore VIP rewards and benefits.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "👑 Open VIP Club",
+                        url=VIP_URL
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Main Menu",
+                        callback_data="home"
+                    )
+                ],
+            ]),
         )
 
     if contains_any(
@@ -538,19 +655,11 @@ def detect_reply(user_text):
             "support",
             "help me",
             "agent",
-            "human",
             "customer care",
-            "contact",
+            "whatsapp",
+            "telegram support",
             "problem",
             "issue",
-            "withdraw",
-            "withdrawal",
-            "deposit",
-            "payment",
-            "verification",
-            "kyc",
-            "login",
-            "password",
         ]
     ):
         return (
@@ -561,25 +670,51 @@ def detect_reply(user_text):
     if contains_any(
         text,
         [
-            "terms",
-            "condition",
+            "responsible",
+            "responsible gambling",
+            "responsible play",
         ]
     ):
         return (
-            "📄 <b>Terms & Conditions</b>",
-            legal_menu("terms")
+            "🛡 <b>Responsible Play</b>\n\n"
+            "Review Betroxy responsible gambling information.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🛡 Responsible Gambling",
+                        url=RESPONSIBLE_URL
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Main Menu",
+                        callback_data="home"
+                    )
+                ],
+            ]),
         )
 
     if contains_any(
         text,
-        [
-            "privacy",
-            "data policy",
-        ]
+        ["play", "betroxy"]
     ):
         return (
-            "🔒 <b>Privacy Policy</b>",
-            legal_menu("privacy")
+            "🎮 <b>Play on Betroxy</b>\n\n"
+            "Open the Betroxy play bot below.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🎮 Open @BetroxyBot",
+                        url=PLAY_BOT_URL
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Main Menu",
+                        callback_data="home"
+                    )
+                ],
+            ]),
         )
 
     return (
@@ -592,10 +727,7 @@ async def chat_handler(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
-    if not update.message:
-        return
-
-    if not update.message.text:
+    if not update.message or not update.message.text:
         return
 
     text, keyboard = detect_reply(
@@ -609,6 +741,10 @@ async def chat_handler(
         disable_web_page_preview=True,
     )
 
+
+# ============================================================
+# LOGGING / STARTUP
+# ============================================================
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -676,7 +812,7 @@ def main():
     )
 
     logger.info(
-        "%s promotional bot starting...",
+        "%s official bot starting...",
         BRAND_NAME
     )
 
