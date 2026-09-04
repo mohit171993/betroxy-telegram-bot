@@ -1,20 +1,33 @@
 import os
+import csv
+import io
 import logging
+import secrets
+import re
 from datetime import datetime, timezone
 
 import psycopg
 from psycopg.rows import dict_row
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    ConversationHandler,
     MessageHandler,
     filters,
 )
+
+# ============================================================
+# CONFIG
+# ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -22,10 +35,14 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
-
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is missing")
+if not ADMIN_ID:
+    raise RuntimeError("ADMIN_ID is missing")
 
+BOT_USERNAME = "BetroxyOfficialBot"
+
+# Public Betroxy links
 PLAY_BOT_URL = "https://t.me/BetroxyBot"
 CASINO_URL = "https://t.me/BetroxyBot/casino"
 SPORTSBOOK_URL = "https://t.me/BetroxyBot/sportsbook"
@@ -52,12 +69,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Conversation states
+ADD_NAME, ADD_CODE, ADD_RATE = range(3)
+SEARCH_CODE = 10
+EDIT_NAME = 20
+EDIT_RATE = 21
+
+
+# ============================================================
+# DATABASE
+# ============================================================
 
 def get_db():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 
 def init_db():
+    """
+    Creates tables if missing and safely upgrades the existing Phase 1 database.
+    Existing affiliates/referrals are preserved.
+    """
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -65,11 +96,12 @@ def init_db():
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     code TEXT UNIQUE NOT NULL,
-                    commission_rate NUMERIC(8, 4) DEFAULT 0,
+                    commission_rate NUMERIC(8,4) DEFAULT 0,
                     is_active BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS referrals (
                     id SERIAL PRIMARY KEY,
@@ -82,15 +114,60 @@ def init_db():
                     joined_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+
+            # Safe migration for affiliate self-service dashboard
+            cur.execute("""
+                ALTER TABLE agents
+                ADD COLUMN IF NOT EXISTS telegram_user_id BIGINT
+            """)
+            cur.execute("""
+                ALTER TABLE agents
+                ADD COLUMN IF NOT EXISTS claim_token TEXT
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_telegram_user_id
+                ON agents(telegram_user_id)
+                WHERE telegram_user_id IS NOT NULL
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_claim_token
+                ON agents(claim_token)
+                WHERE claim_token IS NOT NULL
+            """)
+
         conn.commit()
 
+
+# ============================================================
+# DATABASE HELPERS
+# ============================================================
 
 def find_agent_by_code(code):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT * FROM agents WHERE LOWER(code)=LOWER(%s) LIMIT 1",
-                (code,)
+                (code,),
+            )
+            return cur.fetchone()
+
+
+def find_agent_by_telegram_user_id(user_id):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM agents WHERE telegram_user_id=%s LIMIT 1",
+                (user_id,),
+            )
+            return cur.fetchone()
+
+
+def find_agent_by_claim_token(token):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM agents WHERE claim_token=%s LIMIT 1",
+                (token,),
             )
             return cur.fetchone()
 
@@ -104,24 +181,41 @@ def create_agent(name, code, commission_rate):
                 VALUES (%s, %s, %s, TRUE)
                 RETURNING *
                 """,
-                (name, code.lower(), commission_rate)
+                (name, code.lower(), commission_rate),
             )
             agent = cur.fetchone()
             conn.commit()
             return agent
 
 
-def update_agent_rate(code, commission_rate):
+def update_agent_name(code, new_name):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE agents
-                SET commission_rate = %s
-                WHERE LOWER(code) = LOWER(%s)
+                SET name=%s
+                WHERE LOWER(code)=LOWER(%s)
                 RETURNING *
                 """,
-                (commission_rate, code)
+                (new_name, code),
+            )
+            agent = cur.fetchone()
+            conn.commit()
+            return agent
+
+
+def update_agent_rate(code, rate):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agents
+                SET commission_rate=%s
+                WHERE LOWER(code)=LOWER(%s)
+                RETURNING *
+                """,
+                (rate, code),
             )
             agent = cur.fetchone()
             conn.commit()
@@ -134,11 +228,65 @@ def set_agent_status(code, status):
             cur.execute(
                 """
                 UPDATE agents
-                SET is_active = %s
-                WHERE LOWER(code) = LOWER(%s)
+                SET is_active=%s
+                WHERE LOWER(code)=LOWER(%s)
                 RETURNING *
                 """,
-                (status, code)
+                (status, code),
+            )
+            agent = cur.fetchone()
+            conn.commit()
+            return agent
+
+
+def generate_claim_token(code):
+    token = secrets.token_urlsafe(18)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agents
+                SET claim_token=%s
+                WHERE LOWER(code)=LOWER(%s)
+                RETURNING *
+                """,
+                (token, code),
+            )
+            agent = cur.fetchone()
+            conn.commit()
+            return agent, token
+
+
+def bind_agent_account(token, telegram_user_id):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agents
+                SET telegram_user_id=%s,
+                    claim_token=NULL
+                WHERE claim_token=%s
+                RETURNING *
+                """,
+                (telegram_user_id, token),
+            )
+            agent = cur.fetchone()
+            conn.commit()
+            return agent
+
+
+def unlink_agent_account(code):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agents
+                SET telegram_user_id=NULL,
+                    claim_token=NULL
+                WHERE LOWER(code)=LOWER(%s)
+                RETURNING *
+                """,
+                (code,),
             )
             agent = cur.fetchone()
             conn.commit()
@@ -146,11 +294,20 @@ def set_agent_status(code, status):
 
 
 def save_referral(user, agent, payload):
+    """
+    First-touch attribution:
+    - each Telegram user is stored once
+    - opening another affiliate link later does not overwrite attribution
+    - an affiliate opening their own referral link does not count themselves
+    """
+    if agent and agent.get("telegram_user_id") == user.id:
+        return None, False
+
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT * FROM referrals WHERE telegram_user_id=%s",
-                (user.id,)
+                (user.id,),
             )
             existing = cur.fetchone()
             if existing:
@@ -177,8 +334,8 @@ def save_referral(user, agent, payload):
                     user.last_name,
                     agent["id"] if agent else None,
                     payload,
-                    datetime.now(timezone.utc)
-                )
+                    datetime.now(timezone.utc),
+                ),
             )
             referral = cur.fetchone()
             conn.commit()
@@ -190,26 +347,66 @@ def get_agent_stats(code):
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT * FROM agents WHERE LOWER(code)=LOWER(%s)",
-                (code,)
+                (code,),
             )
             agent = cur.fetchone()
             if not agent:
                 return None
 
             cur.execute(
-                "SELECT COUNT(*) AS total_referrals FROM referrals WHERE agent_id=%s",
-                (agent["id"],)
+                "SELECT COUNT(*) AS total FROM referrals WHERE agent_id=%s",
+                (agent["id"],),
             )
-            total = cur.fetchone()["total_referrals"]
-            return {"agent": agent, "referrals": total}
+            total = cur.fetchone()["total"]
+
+            cur.execute(
+                """
+                SELECT COUNT(*) AS today
+                FROM referrals
+                WHERE agent_id=%s
+                  AND joined_at >= DATE_TRUNC('day', NOW())
+                """,
+                (agent["id"],),
+            )
+            today = cur.fetchone()["today"]
+
+            cur.execute(
+                """
+                SELECT COUNT(*) AS week
+                FROM referrals
+                WHERE agent_id=%s
+                  AND joined_at >= NOW() - INTERVAL '7 days'
+                """,
+                (agent["id"],),
+            )
+            week = cur.fetchone()["week"]
+
+            cur.execute(
+                """
+                SELECT COUNT(*) AS month
+                FROM referrals
+                WHERE agent_id=%s
+                  AND joined_at >= NOW() - INTERVAL '30 days'
+                """,
+                (agent["id"],),
+            )
+            month = cur.fetchone()["month"]
+
+            return {
+                "agent": agent,
+                "total": total,
+                "today": today,
+                "week": week,
+                "month": month,
+            }
 
 
-def get_agent_users(code):
+def get_agent_users(code, limit=20):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT * FROM agents WHERE LOWER(code)=LOWER(%s)",
-                (code,)
+                (code,),
             )
             agent = cur.fetchone()
             if not agent:
@@ -221,15 +418,108 @@ def get_agent_users(code):
                 FROM referrals
                 WHERE agent_id=%s
                 ORDER BY joined_at DESC
-                LIMIT 20
+                LIMIT %s
                 """,
-                (agent["id"],)
+                (agent["id"], limit),
             )
             return cur.fetchall()
 
 
-def main_menu():
-    return InlineKeyboardMarkup([
+def list_agents(limit=50):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    a.*,
+                    COUNT(r.id) AS referral_count
+                FROM agents a
+                LEFT JOIN referrals r ON r.agent_id=a.id
+                GROUP BY a.id
+                ORDER BY referral_count DESC, a.created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return cur.fetchall()
+
+
+def overall_report():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM agents")
+            total_agents = cur.fetchone()["n"]
+
+            cur.execute("SELECT COUNT(*) AS n FROM agents WHERE is_active=TRUE")
+            active_agents = cur.fetchone()["n"]
+
+            cur.execute("SELECT COUNT(*) AS n FROM referrals WHERE agent_id IS NOT NULL")
+            total_referrals = cur.fetchone()["n"]
+
+            cur.execute("""
+                SELECT COUNT(*) AS n
+                FROM referrals
+                WHERE agent_id IS NOT NULL
+                  AND joined_at >= DATE_TRUNC('day', NOW())
+            """)
+            today = cur.fetchone()["n"]
+
+            cur.execute("""
+                SELECT COUNT(*) AS n
+                FROM referrals
+                WHERE agent_id IS NOT NULL
+                  AND joined_at >= NOW() - INTERVAL '7 days'
+            """)
+            week = cur.fetchone()["n"]
+
+            cur.execute("""
+                SELECT a.name, a.code, COUNT(r.id) AS c
+                FROM agents a
+                LEFT JOIN referrals r ON r.agent_id=a.id
+                GROUP BY a.id
+                ORDER BY c DESC
+                LIMIT 1
+            """)
+            top = cur.fetchone()
+
+            return {
+                "total_agents": total_agents,
+                "active_agents": active_agents,
+                "total_referrals": total_referrals,
+                "today": today,
+                "week": week,
+                "top": top,
+            }
+
+
+def export_rows():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    a.name AS agent_name,
+                    a.code AS agent_code,
+                    a.commission_rate,
+                    a.is_active,
+                    r.telegram_user_id,
+                    r.telegram_username,
+                    r.first_name,
+                    r.last_name,
+                    r.joined_at
+                FROM referrals r
+                LEFT JOIN agents a ON a.id=r.agent_id
+                WHERE r.agent_id IS NOT NULL
+                ORDER BY r.joined_at DESC
+            """)
+            return cur.fetchall()
+
+
+# ============================================================
+# MENUS
+# ============================================================
+
+def public_menu(user_id=None):
+    rows = [
         [InlineKeyboardButton("🎮 Play on Betroxy", url=PLAY_BOT_URL)],
         [
             InlineKeyboardButton("🎰 Casino", url=CASINO_URL),
@@ -251,7 +541,19 @@ def main_menu():
             InlineKeyboardButton("💬 Support", callback_data="support"),
             InlineKeyboardButton("🛡 Responsible Play", url=RESPONSIBLE_URL),
         ],
-    ])
+    ]
+
+    if user_id and find_agent_by_telegram_user_id(user_id):
+        rows.insert(0, [
+            InlineKeyboardButton("📈 My Affiliate Performance", callback_data="affiliate_home")
+        ])
+
+    if user_id == ADMIN_ID:
+        rows.insert(0, [
+            InlineKeyboardButton("🛠 Admin Panel", callback_data="admin_home")
+        ])
+
+    return InlineKeyboardMarkup(rows)
 
 
 def support_menu():
@@ -262,29 +564,146 @@ def support_menu():
     ])
 
 
+def admin_menu():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👥 Affiliates", callback_data="admin_agents"),
+            InlineKeyboardButton("➕ Add Affiliate", callback_data="admin_add"),
+        ],
+        [
+            InlineKeyboardButton("📊 Overall Report", callback_data="admin_report"),
+            InlineKeyboardButton("🔎 Search Affiliate", callback_data="admin_search"),
+        ],
+        [
+            InlineKeyboardButton("📥 Export CSV", callback_data="admin_export"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Public Menu", callback_data="home"),
+        ],
+    ])
+
+
+def agent_action_menu(code, active=True):
+    status_button = (
+        InlineKeyboardButton("⛔ Disable", callback_data=f"agent_disable:{code}")
+        if active
+        else InlineKeyboardButton("✅ Enable", callback_data=f"agent_enable:{code}")
+    )
+
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✏️ Change Name", callback_data=f"agent_edit_name:{code}"),
+            InlineKeyboardButton("💰 Change %", callback_data=f"agent_edit_rate:{code}"),
+        ],
+        [
+            InlineKeyboardButton("👥 View Users", callback_data=f"agent_users:{code}"),
+            status_button,
+        ],
+        [
+            InlineKeyboardButton("🔐 Affiliate Access", callback_data=f"agent_access:{code}"),
+            InlineKeyboardButton("🔓 Unlink Account", callback_data=f"agent_unlink:{code}"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Affiliates", callback_data="admin_agents"),
+            InlineKeyboardButton("🏠 Admin", callback_data="admin_home"),
+        ],
+    ])
+
+
+def affiliate_menu():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Refresh", callback_data="affiliate_home"),
+            InlineKeyboardButton("🔗 My Referral Link", callback_data="affiliate_link"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Betroxy Menu", callback_data="home"),
+        ],
+    ])
+
+
+# ============================================================
+# AUTH
+# ============================================================
+
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
 
 async def require_admin(update):
-    if not is_admin(update.effective_user.id):
+    if not update.effective_user or not is_admin(update.effective_user.id):
         await update.effective_message.reply_text("❌ Admin access required.")
         return False
     return True
 
 
+# ============================================================
+# TEXT HELPERS
+# ============================================================
+
+def affiliate_report_text(stats):
+    a = stats["agent"]
+    status = "✅ Active" if a["is_active"] else "⛔ Inactive"
+    return (
+        "📈 <b>My Affiliate Performance</b>\n\n"
+        f"Name: {a['name']}\n"
+        f"Code: <code>{a['code']}</code>\n"
+        f"Status: {status}\n"
+        f"Commission Rate: {a['commission_rate']}%\n\n"
+        f"👥 Total Referrals: {stats['total']}\n"
+        f"🆕 Today: {stats['today']}\n"
+        f"📅 Last 7 Days: {stats['week']}\n"
+        f"🗓 Last 30 Days: {stats['month']}\n\n"
+        "ℹ️ Registration, deposit and actual commission earnings "
+        "will appear after Betroxy backend integration."
+    )
+
+
+# ============================================================
+# PUBLIC START
+# ============================================================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    payload = None
-    agent = None
+    payload = context.args[0].strip() if context.args else None
 
-    if context.args:
-        payload = context.args[0].strip()
-        if payload.lower().startswith("agent_"):
-            code = payload[6:]
-            agent = find_agent_by_code(code)
-            if agent and not agent["is_active"]:
-                agent = None
+    # Affiliate account claim link
+    if payload and payload.startswith("claim_"):
+        token = payload[6:]
+        agent = find_agent_by_claim_token(token)
+
+        if not agent:
+            await update.message.reply_text(
+                "❌ This affiliate access link is invalid or has already been used."
+            )
+            return
+
+        try:
+            bound = bind_agent_account(token, user.id)
+        except psycopg.errors.UniqueViolation:
+            await update.message.reply_text(
+                "❌ This Telegram account is already linked to another affiliate."
+            )
+            return
+
+        await update.message.reply_text(
+            "✅ <b>Affiliate Dashboard Activated</b>\n\n"
+            f"Welcome {bound['name']}.\n"
+            "You can now view your performance directly in this bot.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📈 View My Performance", callback_data="affiliate_home")]
+            ]),
+        )
+        return
+
+    # Public referral attribution
+    agent = None
+    if payload and payload.lower().startswith("agent_"):
+        code = payload[6:]
+        agent = find_agent_by_code(code)
+        if agent and not agent["is_active"]:
+            agent = None
 
     _, created = save_referral(user, agent, payload)
 
@@ -296,60 +715,430 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Discover games, promotions, VIP rewards, latest updates and official support.\n\n"
         "Choose an option below 👇",
         parse_mode=ParseMode.HTML,
-        reply_markup=main_menu(),
+        reply_markup=public_menu(user.id),
         disable_web_page_preview=True,
     )
 
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "home":
-        await query.message.reply_text(
-            "👑 <b>Betroxy Official</b>\n\nChoose an option below 👇",
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_menu()
-        )
-    elif query.data == "support":
-        await query.message.reply_text(
-            "💬 <b>Betroxy Support</b>\n\nChoose your preferred support channel:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=support_menu()
-        )
-
-
-async def agent_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update):
         return
 
-    if len(context.args) < 3:
+    await update.message.reply_text(
+        "🛠 <b>Betroxy Affiliate Admin</b>\n\nChoose an option:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_menu(),
+    )
+
+
+async def affiliate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    agent = find_agent_by_telegram_user_id(update.effective_user.id)
+    if not agent:
         await update.message.reply_text(
-            "Usage:\n/agent_add Name code commission_rate\n\n"
-            "Example:\n/agent_add Rahul rahul 5"
+            "You do not have an affiliate dashboard linked to this Telegram account."
         )
         return
 
-    name = context.args[0]
-    code = context.args[1].lower()
+    stats = get_agent_stats(agent["code"])
+    await update.message.reply_text(
+        affiliate_report_text(stats),
+        parse_mode=ParseMode.HTML,
+        reply_markup=affiliate_menu(),
+    )
 
+
+# ============================================================
+# ADMIN LEGACY COMMANDS - still supported
+# ============================================================
+
+async def agent_rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /agent_rate code new_rate")
+        return
+    code = context.args[0]
     try:
-        commission_rate = float(context.args[2])
+        rate = float(context.args[1])
     except ValueError:
-        await update.message.reply_text("❌ Commission rate must be a number.")
+        await update.message.reply_text("❌ Rate must be a number.")
+        return
+    if not 0 <= rate <= 100:
+        await update.message.reply_text("❌ Rate must be between 0 and 100.")
+        return
+    a = update_agent_rate(code, rate)
+    if not a:
+        await update.message.reply_text("❌ Agent not found.")
+        return
+    await update.message.reply_text(
+        f"✅ {a['name']} commission changed to {a['commission_rate']}%."
+    )
+
+
+async def agent_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /agent code")
+        return
+    stats = get_agent_stats(context.args[0])
+    if not stats:
+        await update.message.reply_text("❌ Agent not found.")
+        return
+    a = stats["agent"]
+    await update.message.reply_text(
+        f"📊 <b>{a['name']}</b>\n\n"
+        f"Code: <code>{a['code']}</code>\n"
+        f"Commission: {a['commission_rate']}%\n"
+        f"Status: {'Active' if a['is_active'] else 'Inactive'}\n"
+        f"Total referrals: {stats['total']}\n"
+        f"Today: {stats['today']}\n"
+        f"Last 7 days: {stats['week']}\n"
+        f"Last 30 days: {stats['month']}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def agent_access_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /agent_access code")
         return
 
-    if commission_rate < 0 or commission_rate > 100:
-        await update.message.reply_text("❌ Commission rate must be between 0 and 100.")
+    agent, token = generate_claim_token(context.args[0])
+    if not agent:
+        await update.message.reply_text("❌ Agent not found.")
         return
 
+    link = f"https://t.me/{BOT_USERNAME}?start=claim_{token}"
+
+    await update.message.reply_text(
+        "🔐 <b>Affiliate Dashboard Access Link</b>\n\n"
+        f"Affiliate: {agent['name']}\n"
+        f"Code: <code>{agent['code']}</code>\n\n"
+        "Send this private one-time link only to the affiliate:\n"
+        f"<code>{link}</code>\n\n"
+        "After they open it, their Telegram account will be linked to this affiliate.",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+# ============================================================
+# CALLBACK HANDLER
+# ============================================================
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+
+    if data == "home":
+        await q.message.reply_text(
+            "👑 <b>Betroxy Official</b>\n\nChoose an option below 👇",
+            parse_mode=ParseMode.HTML,
+            reply_markup=public_menu(q.from_user.id),
+        )
+        return
+
+    if data == "support":
+        await q.message.reply_text(
+            "💬 <b>Betroxy Support</b>\n\nChoose your preferred support channel:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=support_menu(),
+        )
+        return
+
+    if data == "affiliate_home":
+        agent = find_agent_by_telegram_user_id(q.from_user.id)
+        if not agent:
+            await q.message.reply_text("❌ Affiliate dashboard not linked.")
+            return
+        stats = get_agent_stats(agent["code"])
+        await q.message.reply_text(
+            affiliate_report_text(stats),
+            parse_mode=ParseMode.HTML,
+            reply_markup=affiliate_menu(),
+        )
+        return
+
+    if data == "affiliate_link":
+        agent = find_agent_by_telegram_user_id(q.from_user.id)
+        if not agent:
+            await q.message.reply_text("❌ Affiliate dashboard not linked.")
+            return
+        link = f"https://t.me/{BOT_USERNAME}?start=agent_{agent['code']}"
+        await q.message.reply_text(
+            "🔗 <b>Your Referral Link</b>\n\n"
+            f"<code>{link}</code>",
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+
+    # Admin-only callbacks below
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin access required.")
+        return
+
+    if data == "admin_home":
+        await q.message.reply_text(
+            "🛠 <b>Betroxy Affiliate Admin</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_menu(),
+        )
+        return
+
+    if data == "admin_agents":
+        agents = list_agents()
+        if not agents:
+            await q.message.reply_text(
+                "No affiliates created yet.",
+                reply_markup=admin_menu(),
+            )
+            return
+
+        rows = []
+        for a in agents[:20]:
+            status = "✅" if a["is_active"] else "⛔"
+            linked = "🔐" if a.get("telegram_user_id") else ""
+            label = f"{status}{linked} {a['name']} • {a['referral_count']} users"
+            rows.append([
+                InlineKeyboardButton(
+                    label,
+                    callback_data=f"agent_view:{a['code']}",
+                )
+            ])
+        rows.append([InlineKeyboardButton("🏠 Admin", callback_data="admin_home")])
+
+        await q.message.reply_text(
+            "👥 <b>Affiliates</b>\n\nTap an affiliate:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+        return
+
+    if data == "admin_report":
+        r = overall_report()
+        top_text = "None yet"
+        if r["top"]:
+            top_text = f"{r['top']['name']} ({r['top']['code']}) • {r['top']['c']} users"
+
+        await q.message.reply_text(
+            "📊 <b>Overall Affiliate Report</b>\n\n"
+            f"👥 Total Affiliates: {r['total_agents']}\n"
+            f"✅ Active Affiliates: {r['active_agents']}\n"
+            f"👤 Total Referred Users: {r['total_referrals']}\n"
+            f"🆕 Referrals Today: {r['today']}\n"
+            f"📅 Referrals Last 7 Days: {r['week']}\n"
+            f"🏆 Top Affiliate: {top_text}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_menu(),
+        )
+        return
+
+    if data == "admin_export":
+        rows = export_rows()
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow([
+            "Agent Name", "Agent Code", "Commission %", "Active",
+            "Telegram User ID", "Username", "First Name", "Last Name", "Joined At"
+        ])
+        for r in rows:
+            writer.writerow([
+                r["agent_name"], r["agent_code"], r["commission_rate"], r["is_active"],
+                r["telegram_user_id"], r["telegram_username"], r["first_name"],
+                r["last_name"], r["joined_at"]
+            ])
+
+        bio = io.BytesIO(out.getvalue().encode("utf-8-sig"))
+        bio.name = f"betroxy_affiliate_report_{datetime.now().date()}.csv"
+
+        await q.message.reply_document(
+            document=bio,
+            caption="📥 Betroxy affiliate referral report",
+        )
+        return
+
+    if data.startswith("agent_view:"):
+        code = data.split(":", 1)[1]
+        stats = get_agent_stats(code)
+        if not stats:
+            await q.message.reply_text("❌ Agent not found.")
+            return
+
+        a = stats["agent"]
+        link = f"https://t.me/{BOT_USERNAME}?start=agent_{a['code']}"
+        linked = "Yes" if a.get("telegram_user_id") else "No"
+
+        await q.message.reply_text(
+            "👤 <b>Affiliate Details</b>\n\n"
+            f"Name: {a['name']}\n"
+            f"Code: <code>{a['code']}</code>\n"
+            f"Commission: {a['commission_rate']}%\n"
+            f"Status: {'Active' if a['is_active'] else 'Inactive'}\n"
+            f"Dashboard Linked: {linked}\n\n"
+            f"👥 Total Users: {stats['total']}\n"
+            f"🆕 Today: {stats['today']}\n"
+            f"📅 Last 7 Days: {stats['week']}\n"
+            f"🗓 Last 30 Days: {stats['month']}\n\n"
+            f"🔗 Referral Link:\n<code>{link}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=agent_action_menu(a["code"], a["is_active"]),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if data.startswith("agent_users:"):
+        code = data.split(":", 1)[1]
+        users = get_agent_users(code)
+        stats = get_agent_stats(code)
+        if users is None or not stats:
+            await q.message.reply_text("❌ Agent not found.")
+            return
+        if not users:
+            await q.message.reply_text(
+                "No referred users yet.",
+                reply_markup=agent_action_menu(code, stats["agent"]["is_active"]),
+            )
+            return
+
+        lines = ["👥 <b>Recent Referred Users</b>", ""]
+        for u in users:
+            username = f"@{u['telegram_username']}" if u["telegram_username"] else "No username"
+            lines.append(
+                f"• {u['first_name'] or 'Unknown'} | {username} | "
+                f"<code>{u['telegram_user_id']}</code>"
+            )
+
+        await q.message.reply_text(
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            reply_markup=agent_action_menu(code, stats["agent"]["is_active"]),
+        )
+        return
+
+    if data.startswith("agent_disable:"):
+        code = data.split(":", 1)[1]
+        a = set_agent_status(code, False)
+        if not a:
+            await q.message.reply_text("❌ Agent not found.")
+            return
+        await q.message.reply_text(
+            f"⛔ {a['name']} disabled.",
+            reply_markup=agent_action_menu(code, False),
+        )
+        return
+
+    if data.startswith("agent_enable:"):
+        code = data.split(":", 1)[1]
+        a = set_agent_status(code, True)
+        if not a:
+            await q.message.reply_text("❌ Agent not found.")
+            return
+        await q.message.reply_text(
+            f"✅ {a['name']} enabled.",
+            reply_markup=agent_action_menu(code, True),
+        )
+        return
+
+    if data.startswith("agent_access:"):
+        code = data.split(":", 1)[1]
+        agent, token = generate_claim_token(code)
+        if not agent:
+            await q.message.reply_text("❌ Agent not found.")
+            return
+        link = f"https://t.me/{BOT_USERNAME}?start=claim_{token}"
+        await q.message.reply_text(
+            "🔐 <b>Private Affiliate Access Link</b>\n\n"
+            f"Send this one-time link to {agent['name']}:\n\n"
+            f"<code>{link}</code>\n\n"
+            "When they open it, their Telegram account will be linked "
+            "and they will get a My Affiliate Performance dashboard.",
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+
+    if data.startswith("agent_unlink:"):
+        code = data.split(":", 1)[1]
+        a = unlink_agent_account(code)
+        if not a:
+            await q.message.reply_text("❌ Agent not found.")
+            return
+        await q.message.reply_text(
+            f"🔓 Affiliate dashboard account unlinked for {a['name']}."
+        )
+        return
+
+
+# ============================================================
+# ADD AFFILIATE CONVERSATION
+# ============================================================
+
+async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    await q.message.reply_text(
+        "➕ <b>Add Affiliate</b>\n\nEnter affiliate name:",
+        parse_mode=ParseMode.HTML,
+    )
+    return ADD_NAME
+
+
+async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["new_agent_name"] = update.message.text.strip()
+    await update.message.reply_text(
+        "Enter affiliate code.\nExample: rahul\n\nUse letters, numbers or underscore only."
+    )
+    return ADD_CODE
+
+
+async def add_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = update.message.text.strip().lower()
+
+    if not re.fullmatch(r"[a-z0-9_]{2,40}", code):
+        await update.message.reply_text(
+            "❌ Invalid code. Use only letters, numbers or underscore (2-40 characters)."
+        )
+        return ADD_CODE
+
+    if find_agent_by_code(code):
+        await update.message.reply_text(
+            "❌ This code already exists. Enter another code:"
+        )
+        return ADD_CODE
+
+    context.user_data["new_agent_code"] = code
+    await update.message.reply_text(
+        "Enter commission rate.\nExample: 0, 5, 7.5, 10"
+    )
+    return ADD_RATE
+
+
+async def add_rate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        agent = create_agent(name, code, commission_rate)
-    except psycopg.errors.UniqueViolation:
-        await update.message.reply_text("❌ Agent code already exists.")
-        return
+        rate = float(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ Enter a valid number.")
+        return ADD_RATE
 
-    link = f"https://t.me/BetroxyOfficialBot?start=agent_{agent['code']}"
+    if not 0 <= rate <= 100:
+        await update.message.reply_text("❌ Rate must be between 0 and 100.")
+        return ADD_RATE
+
+    agent = create_agent(
+        context.user_data["new_agent_name"],
+        context.user_data["new_agent_code"],
+        rate,
+    )
+
+    link = f"https://t.me/{BOT_USERNAME}?start=agent_{agent['code']}"
 
     await update.message.reply_text(
         "✅ <b>Affiliate Created</b>\n\n"
@@ -357,140 +1146,183 @@ async def agent_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Code: <code>{agent['code']}</code>\n"
         f"Commission: {agent['commission_rate']}%\n\n"
         f"Referral Link:\n<code>{link}</code>",
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML,
+        reply_markup=agent_action_menu(agent["code"], True),
+        disable_web_page_preview=True,
     )
 
+    context.user_data.clear()
+    return ConversationHandler.END
 
-async def agent_rate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update):
-        return
 
-    if len(context.args) < 2:
+# ============================================================
+# SEARCH CONVERSATION
+# ============================================================
+
+async def search_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+    await q.message.reply_text("🔎 Enter affiliate code:")
+    return SEARCH_CODE
+
+
+async def search_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = update.message.text.strip()
+    stats = get_agent_stats(code)
+
+    if not stats:
         await update.message.reply_text(
-            "Usage:\n/agent_rate agent_code new_rate\n\n"
-            "Example:\n/agent_rate rahul 10"
+            "❌ Affiliate not found.",
+            reply_markup=admin_menu(),
         )
-        return
+        return ConversationHandler.END
 
-    code = context.args[0].strip()
+    a = stats["agent"]
+    link = f"https://t.me/{BOT_USERNAME}?start=agent_{a['code']}"
+
+    await update.message.reply_text(
+        "👤 <b>Affiliate Details</b>\n\n"
+        f"Name: {a['name']}\n"
+        f"Code: <code>{a['code']}</code>\n"
+        f"Commission: {a['commission_rate']}%\n"
+        f"Status: {'Active' if a['is_active'] else 'Inactive'}\n\n"
+        f"👥 Total Users: {stats['total']}\n"
+        f"🆕 Today: {stats['today']}\n"
+        f"📅 Last 7 Days: {stats['week']}\n"
+        f"🗓 Last 30 Days: {stats['month']}\n\n"
+        f"🔗 Referral Link:\n<code>{link}</code>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=agent_action_menu(a["code"], a["is_active"]),
+        disable_web_page_preview=True,
+    )
+
+    return ConversationHandler.END
+
+
+# ============================================================
+# EDIT NAME CONVERSATION
+# ============================================================
+
+async def edit_name_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    code = q.data.split(":", 1)[1]
+    context.user_data["edit_code"] = code
+
+    await q.message.reply_text(
+        f"✏️ Enter the new name for affiliate <code>{code}</code>:",
+        parse_mode=ParseMode.HTML,
+    )
+    return EDIT_NAME
+
+
+async def edit_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = context.user_data["edit_code"]
+    new_name = update.message.text.strip()
+
+    if not new_name:
+        await update.message.reply_text("❌ Name cannot be empty.")
+        return EDIT_NAME
+
+    a = update_agent_name(code, new_name)
+
+    await update.message.reply_text(
+        f"✅ Affiliate name changed to <b>{a['name']}</b>.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=agent_action_menu(code, a["is_active"]),
+    )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# ============================================================
+# EDIT RATE CONVERSATION
+# ============================================================
+
+async def edit_rate_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    code = q.data.split(":", 1)[1]
+    context.user_data["edit_code"] = code
+
+    await q.message.reply_text(
+        f"💰 Enter new commission % for <code>{code}</code>:",
+        parse_mode=ParseMode.HTML,
+    )
+    return EDIT_RATE
+
+
+async def edit_rate_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = context.user_data["edit_code"]
 
     try:
-        new_rate = float(context.args[1])
+        rate = float(update.message.text.strip())
     except ValueError:
-        await update.message.reply_text("❌ Commission rate must be a number.")
-        return
+        await update.message.reply_text("❌ Enter a valid number.")
+        return EDIT_RATE
 
-    if new_rate < 0 or new_rate > 100:
-        await update.message.reply_text("❌ Commission rate must be between 0 and 100.")
-        return
+    if not 0 <= rate <= 100:
+        await update.message.reply_text("❌ Rate must be between 0 and 100.")
+        return EDIT_RATE
 
-    agent = update_agent_rate(code, new_rate)
-
-    if not agent:
-        await update.message.reply_text("❌ Agent not found.")
-        return
+    a = update_agent_rate(code, rate)
 
     await update.message.reply_text(
-        "✅ <b>Commission Updated</b>\n\n"
-        f"Name: {agent['name']}\n"
-        f"Code: <code>{agent['code']}</code>\n"
-        f"New Commission: {agent['commission_rate']}%",
-        parse_mode=ParseMode.HTML
+        f"✅ {a['name']} commission changed to {a['commission_rate']}%.",
+        reply_markup=agent_action_menu(code, a["is_active"]),
     )
 
+    context.user_data.clear()
+    return ConversationHandler.END
 
-async def agent_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update):
-        return
 
-    if not context.args:
-        await update.message.reply_text("Usage:\n/agent agent_code")
-        return
-
-    stats = get_agent_stats(context.args[0])
-    if not stats:
-        await update.message.reply_text("❌ Agent not found.")
-        return
-
-    agent = stats["agent"]
-    link = f"https://t.me/BetroxyOfficialBot?start=agent_{agent['code']}"
-
-    await update.message.reply_text(
-        "📊 <b>Affiliate Stats</b>\n\n"
-        f"Name: {agent['name']}\n"
-        f"Code: <code>{agent['code']}</code>\n"
-        f"Commission: {agent['commission_rate']}%\n"
-        f"Status: {'Active' if agent['is_active'] else 'Inactive'}\n\n"
-        f"👥 Referred Users: {stats['referrals']}\n\n"
-        f"🔗 Link:\n<code>{link}</code>",
-        parse_mode=ParseMode.HTML
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.effective_message.reply_text(
+        "Cancelled.",
+        reply_markup=admin_menu() if is_admin(update.effective_user.id) else None,
     )
+    return ConversationHandler.END
 
 
-async def agent_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update):
-        return
-
-    if not context.args:
-        await update.message.reply_text("Usage:\n/agent_users agent_code")
-        return
-
-    users = get_agent_users(context.args[0])
-
-    if users is None:
-        await update.message.reply_text("❌ Agent not found.")
-        return
-
-    if not users:
-        await update.message.reply_text("No referred users yet.")
-        return
-
-    text = "👥 <b>Recent Referred Users</b>\n\n"
-    for user in users:
-        username = (
-            f"@{user['telegram_username']}"
-            if user["telegram_username"]
-            else "No username"
-        )
-        text += (
-            f"• {user['first_name'] or 'Unknown'} | {username} "
-            f"| <code>{user['telegram_user_id']}</code>\n"
-        )
-
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-
-
-async def agent_disable(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update):
-        return
-    if not context.args:
-        await update.message.reply_text("Usage:\n/agent_disable agent_code")
-        return
-    agent = set_agent_status(context.args[0], False)
-    if not agent:
-        await update.message.reply_text("❌ Agent not found.")
-        return
-    await update.message.reply_text(f"⛔ Agent {agent['code']} disabled.")
-
-
-async def agent_enable(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await require_admin(update):
-        return
-    if not context.args:
-        await update.message.reply_text("Usage:\n/agent_enable agent_code")
-        return
-    agent = set_agent_status(context.args[0], True)
-    if not agent:
-        await update.message.reply_text("❌ Agent not found.")
-        return
-    await update.message.reply_text(f"✅ Agent {agent['code']} enabled.")
-
+# ============================================================
+# FALLBACK CHAT
+# ============================================================
 
 async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if is_admin(user_id):
+        await update.message.reply_text(
+            "🛠 <b>Admin Panel</b>\n\nTap a button below:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_menu(),
+        )
+        return
+
+    agent = find_agent_by_telegram_user_id(user_id)
+    if agent:
+        stats = get_agent_stats(agent["code"])
+        await update.message.reply_text(
+            affiliate_report_text(stats),
+            parse_mode=ParseMode.HTML,
+            reply_markup=affiliate_menu(),
+        )
+        return
+
     await update.message.reply_text(
         "👑 <b>Betroxy Official</b>\n\nChoose an option below 👇",
         parse_mode=ParseMode.HTML,
-        reply_markup=main_menu()
+        reply_markup=public_menu(user_id),
     )
 
 
@@ -498,22 +1330,75 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.exception("Bot error", exc_info=context.error)
 
 
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
     init_db()
+
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # Conversation handlers FIRST so their callback patterns take priority
+    add_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(add_start, pattern=r"^admin_add$")
+        ],
+        states={
+            ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
+            ADD_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_code)],
+            ADD_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_rate)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    search_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(search_start, pattern=r"^admin_search$")
+        ],
+        states={
+            SEARCH_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_code)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    edit_name_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(edit_name_start, pattern=r"^agent_edit_name:")
+        ],
+        states={
+            EDIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_name_save)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    edit_rate_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(edit_rate_start, pattern=r"^agent_edit_rate:")
+        ],
+        states={
+            EDIT_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_rate_save)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("agent_add", agent_add))
-    app.add_handler(CommandHandler("agent_rate", agent_rate))
-    app.add_handler(CommandHandler("agent", agent_stats))
-    app.add_handler(CommandHandler("agent_users", agent_users))
-    app.add_handler(CommandHandler("agent_disable", agent_disable))
-    app.add_handler(CommandHandler("agent_enable", agent_enable))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CommandHandler("affiliate", affiliate_command))
+    app.add_handler(CommandHandler("agent", agent_stats_command))
+    app.add_handler(CommandHandler("agent_rate", agent_rate_command))
+    app.add_handler(CommandHandler("agent_access", agent_access_command))
+
+    app.add_handler(add_conv)
+    app.add_handler(search_conv)
+    app.add_handler(edit_name_conv)
+    app.add_handler(edit_rate_conv)
+
+    app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
     app.add_error_handler(error_handler)
 
-    logger.info("Betroxy affiliate bot starting...")
+    logger.info("Betroxy advanced affiliate bot starting...")
     app.run_polling(drop_pending_updates=True)
 
 
