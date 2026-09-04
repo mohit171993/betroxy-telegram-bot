@@ -1,0 +1,24 @@
+BETROXY BOTFATHER SETUP
+
+Bot username:
+@Betroxyofficialbot
+
+Name:
+Betroxy
+
+Suggested description:
+Official Betroxy bot for platform access, promotions, updates and support.
+
+Suggested About text:
+Betroxy | Official updates, offers & support.
+
+Suggested commands:
+start - Open Betroxy menu
+help - Help and support
+
+Profile photo:
+Upload assets/logo.png
+
+Security:
+Never send or upload the BOT_TOKEN publicly.
+Keep the token only in Railway Variables.
