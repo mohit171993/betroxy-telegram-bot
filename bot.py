@@ -74,6 +74,8 @@ ADD_NAME, ADD_CODE, ADD_RATE = range(3)
 SEARCH_CODE = 10
 EDIT_NAME = 20
 EDIT_RATE = 21
+EDIT_CODE = 22
+EDIT_URL = 23
 
 
 # ============================================================
@@ -123,6 +125,10 @@ def init_db():
             cur.execute("""
                 ALTER TABLE agents
                 ADD COLUMN IF NOT EXISTS claim_token TEXT
+            """)
+            cur.execute("""
+                ALTER TABLE agents
+                ADD COLUMN IF NOT EXISTS custom_url TEXT
             """)
             cur.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_telegram_user_id
@@ -203,6 +209,74 @@ def update_agent_name(code, new_name):
             agent = cur.fetchone()
             conn.commit()
             return agent
+
+
+
+def update_agent_code(old_code, new_code):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agents
+                SET code=%s
+                WHERE LOWER(code)=LOWER(%s)
+                RETURNING *
+                """,
+                (new_code.lower(), old_code),
+            )
+            agent = cur.fetchone()
+            conn.commit()
+            return agent
+
+
+def update_agent_url(code, custom_url):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agents
+                SET custom_url=%s
+                WHERE LOWER(code)=LOWER(%s)
+                RETURNING *
+                """,
+                (custom_url or None, code),
+            )
+            agent = cur.fetchone()
+            conn.commit()
+            return agent
+
+
+def delete_agent_permanently(code):
+    """
+    Permanently deletes the affiliate and all Telegram referral rows attributed
+    to that affiliate. This cannot be undone.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM agents WHERE LOWER(code)=LOWER(%s) FOR UPDATE",
+                (code,),
+            )
+            agent = cur.fetchone()
+            if not agent:
+                return None, 0
+
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM referrals WHERE agent_id=%s",
+                (agent["id"],),
+            )
+            referral_count = cur.fetchone()["n"]
+
+            cur.execute(
+                "DELETE FROM referrals WHERE agent_id=%s",
+                (agent["id"],),
+            )
+            cur.execute(
+                "DELETE FROM agents WHERE id=%s",
+                (agent["id"],),
+            )
+            conn.commit()
+            return agent, referral_count
 
 
 def update_agent_rate(code, rate):
@@ -592,8 +666,12 @@ def agent_action_menu(code, active=True):
 
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✏️ Change Name", callback_data=f"agent_edit_name:{code}"),
-            InlineKeyboardButton("💰 Change %", callback_data=f"agent_edit_rate:{code}"),
+            InlineKeyboardButton("✏️ Name", callback_data=f"agent_edit_name:{code}"),
+            InlineKeyboardButton("🆔 Code", callback_data=f"agent_edit_code:{code}"),
+        ],
+        [
+            InlineKeyboardButton("💰 Commission %", callback_data=f"agent_edit_rate:{code}"),
+            InlineKeyboardButton("🔗 URL", callback_data=f"agent_edit_url:{code}"),
         ],
         [
             InlineKeyboardButton("👥 View Users", callback_data=f"agent_users:{code}"),
@@ -602,6 +680,9 @@ def agent_action_menu(code, active=True):
         [
             InlineKeyboardButton("🔐 Affiliate Access", callback_data=f"agent_access:{code}"),
             InlineKeyboardButton("🔓 Unlink Account", callback_data=f"agent_unlink:{code}"),
+        ],
+        [
+            InlineKeyboardButton("🗑 Permanent Delete", callback_data=f"agent_delete_confirm:{code}"),
         ],
         [
             InlineKeyboardButton("⬅️ Affiliates", callback_data="admin_agents"),
@@ -825,6 +906,99 @@ async def agent_access_command(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
+
+# ============================================================
+# BULK INSTAGRAM AFFILIATE CREATION
+# ============================================================
+
+INSTAGRAM_AFFILIATES = [
+    ("fakt_cricket_memes", "faktcricket"),
+    ("ritikwins", "ritikwins"),
+    ("theankuedit", "theankuedit"),
+    ("5wides", "5wides"),
+    ("cricket.official10", "cricketofficial10"),
+    ("bharath._editss", "bharatheditss"),
+    ("ryuzakiii.exeeeeee", "ryuzakiiiexe"),
+    ("cric__master18", "cricmaster18"),
+    ("akash_mahi0007", "akashmahi0007"),
+    ("cricysaakir2.0", "cricysaakir20"),
+    ("ishankishan32_", "ishankishan32"),
+    ("rsnreel", "rsnreel"),
+    ("fahadcricketreviews", "fahadcricket"),
+    ("cricsays", "cricsays"),
+    ("saketeditt", "saketeditt"),
+    ("rohit_sharma_status._45", "rohitstatus45"),
+    ("official_bobby_4uhh_", "officialbobby4"),
+    ("surat_tennis_cricket_", "surattennis"),
+    ("cricket_exeee", "cricketexeee"),
+    ("smriti_jemi_lovers", "smritijemi"),
+    ("maxxo_editz_45", "maxxoeditz45"),
+    ("rohit_sharma_.status_king", "rohitstatusking"),
+    ("hitman_cha_diwana___45", "hitmandiwana45"),
+    ("rishabh_dines17", "rishabhdines17"),
+    ("csk_marathi_status_2.0", "cskmarathi20"),
+    ("virat.kohli.marathi.status", "viratkohlitheme"),
+    ("mahi.lifetime", "mahilifetime"),
+]
+
+
+async def create_instagram_affiliates(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    if not await require_admin(update):
+        return
+
+    created = []
+    existing = []
+    failed = []
+
+    for name, code in INSTAGRAM_AFFILIATES:
+        try:
+            current = find_agent_by_code(code)
+            if current:
+                existing.append(code)
+                continue
+
+            create_agent(name, code, 0)
+            created.append(code)
+
+        except Exception as exc:
+            logger.exception("Bulk affiliate create failed for %s", code)
+            failed.append(code)
+
+    lines = [
+        "✅ <b>Instagram Affiliate Bulk Setup Complete</b>",
+        "",
+        f"Created: {len(created)}",
+        f"Already Existing: {len(existing)}",
+        f"Failed: {len(failed)}",
+    ]
+
+    if created:
+        lines.append("")
+        lines.append("<b>Created Codes:</b>")
+        lines.extend([f"• <code>{c}</code>" for c in created])
+
+    if existing:
+        lines.append("")
+        lines.append("<b>Already Existing:</b>")
+        lines.extend([f"• <code>{c}</code>" for c in existing])
+
+    if failed:
+        lines.append("")
+        lines.append("<b>Failed:</b>")
+        lines.extend([f"• <code>{c}</code>" for c in failed])
+
+    lines.append("")
+    lines.append("All new affiliates were created with 0% commission.")
+
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML
+    )
+
+
 # ============================================================
 # CALLBACK HANDLER
 # ============================================================
@@ -979,7 +1153,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Code: <code>{a['code']}</code>\n"
             f"Commission: {a['commission_rate']}%\n"
             f"Status: {'Active' if a['is_active'] else 'Inactive'}\n"
-            f"Dashboard Linked: {linked}\n\n"
+            f"Dashboard Linked: {linked}\n"
+            f"Custom URL: {a.get('custom_url') or 'Not set'}\n\n"
             f"👥 Total Users: {stats['total']}\n"
             f"🆕 Today: {stats['today']}\n"
             f"📅 Last 7 Days: {stats['week']}\n"
@@ -1072,6 +1247,60 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔓 Affiliate dashboard account unlinked for {a['name']}."
         )
         return
+
+
+
+    if data.startswith("agent_delete_confirm:"):
+        code_to_delete = data.split(":", 1)[1]
+        stats = get_agent_stats(code_to_delete)
+        if not stats:
+            await q.message.reply_text("❌ Agent not found.")
+            return
+
+        a = stats["agent"]
+        await q.message.reply_text(
+            "⚠️ <b>PERMANENT DELETE</b>\n\n"
+            f"Affiliate: <b>{a['name']}</b>\n"
+            f"Code: <code>{a['code']}</code>\n"
+            f"Referred Users: {stats['total']}\n\n"
+            "This will permanently delete the affiliate AND all referral records "
+            "assigned to this affiliate. This cannot be undone.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🗑 YES, DELETE PERMANENTLY",
+                        callback_data=f"agent_delete_yes:{a['code']}"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancel",
+                        callback_data=f"agent_view:{a['code']}"
+                    )
+                ],
+            ]),
+        )
+        return
+
+    if data.startswith("agent_delete_yes:"):
+        code_to_delete = data.split(":", 1)[1]
+        deleted, referral_count = delete_agent_permanently(code_to_delete)
+        if not deleted:
+            await q.message.reply_text("❌ Agent not found.")
+            return
+
+        await q.message.reply_text(
+            "🗑 <b>Affiliate Permanently Deleted</b>\n\n"
+            f"Name: {deleted['name']}\n"
+            f"Code: <code>{deleted['code']}</code>\n"
+            f"Referral records deleted: {referral_count}\n\n"
+            "This action cannot be undone.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_menu(),
+        )
+        return
+
 
 
 # ============================================================
@@ -1187,7 +1416,8 @@ async def search_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Name: {a['name']}\n"
         f"Code: <code>{a['code']}</code>\n"
         f"Commission: {a['commission_rate']}%\n"
-        f"Status: {'Active' if a['is_active'] else 'Inactive'}\n\n"
+        f"Status: {'Active' if a['is_active'] else 'Inactive'}\n"
+        f"Custom URL: {a.get('custom_url') or 'Not set'}\n\n"
         f"👥 Total Users: {stats['total']}\n"
         f"🆕 Today: {stats['today']}\n"
         f"📅 Last 7 Days: {stats['week']}\n"
@@ -1239,6 +1469,134 @@ async def edit_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data.clear()
     return ConversationHandler.END
+
+
+
+# ============================================================
+# EDIT CODE CONVERSATION
+# ============================================================
+
+async def edit_code_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    old_code = q.data.split(":", 1)[1]
+    context.user_data["edit_code_old"] = old_code
+
+    await q.message.reply_text(
+        f"🆔 Enter new affiliate code for <code>{old_code}</code>:\n\n"
+        "Use only letters, numbers or underscore.\n"
+        "Changing the code also changes the public referral link.",
+        parse_mode=ParseMode.HTML,
+    )
+    return EDIT_CODE
+
+
+async def edit_code_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    old_code = context.user_data["edit_code_old"]
+    new_code = update.message.text.strip().lower()
+
+    if not re.fullmatch(r"[a-z0-9_]{2,40}", new_code):
+        await update.message.reply_text(
+            "❌ Invalid code. Use only letters, numbers or underscore (2-40 characters)."
+        )
+        return EDIT_CODE
+
+    existing = find_agent_by_code(new_code)
+    if existing and existing["code"].lower() != old_code.lower():
+        await update.message.reply_text(
+            "❌ This affiliate code already exists. Enter another code:"
+        )
+        return EDIT_CODE
+
+    try:
+        a = update_agent_code(old_code, new_code)
+    except psycopg.errors.UniqueViolation:
+        await update.message.reply_text(
+            "❌ This affiliate code already exists. Enter another code:"
+        )
+        return EDIT_CODE
+
+    if not a:
+        await update.message.reply_text("❌ Agent not found.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    new_link = f"https://t.me/{BOT_USERNAME}?start=agent_{a['code']}"
+
+    await update.message.reply_text(
+        "✅ <b>Affiliate Code Updated</b>\n\n"
+        f"Name: {a['name']}\n"
+        f"New Code: <code>{a['code']}</code>\n"
+        f"New Referral Link:\n<code>{new_link}</code>\n\n"
+        "⚠️ The old referral link will no longer attribute new users.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=agent_action_menu(a["code"], a["is_active"]),
+        disable_web_page_preview=True,
+    )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# ============================================================
+# EDIT URL CONVERSATION
+# ============================================================
+
+async def edit_url_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    code = q.data.split(":", 1)[1]
+    context.user_data["edit_url_code"] = code
+
+    await q.message.reply_text(
+        f"🔗 Enter custom URL for affiliate <code>{code}</code>.\n\n"
+        "Example:\nhttps://www.betraxy.com/5wides\n\n"
+        "Send <code>clear</code> to remove the custom URL.",
+        parse_mode=ParseMode.HTML,
+    )
+    return EDIT_URL
+
+
+async def edit_url_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = context.user_data["edit_url_code"]
+    value = update.message.text.strip()
+
+    if value.lower() == "clear":
+        value = ""
+    elif not re.fullmatch(r"https://[^\s]+", value):
+        await update.message.reply_text(
+            "❌ Enter a valid HTTPS URL, for example:\n"
+            "https://www.betraxy.com/5wides\n\n"
+            "Or send: clear"
+        )
+        return EDIT_URL
+
+    a = update_agent_url(code, value)
+
+    if not a:
+        await update.message.reply_text("❌ Agent not found.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "✅ <b>Affiliate URL Updated</b>\n\n"
+        f"Name: {a['name']}\n"
+        f"Code: <code>{a['code']}</code>\n"
+        f"Custom URL: {a.get('custom_url') or 'Not set'}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=agent_action_menu(a["code"], a["is_active"]),
+        disable_web_page_preview=True,
+    )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
 
 
 # ============================================================
@@ -1372,6 +1730,26 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    edit_code_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(edit_code_start, pattern=r"^agent_edit_code:")
+        ],
+        states={
+            EDIT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_code_save)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    edit_url_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(edit_url_start, pattern=r"^agent_edit_url:")
+        ],
+        states={
+            EDIT_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_url_save)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     edit_rate_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(edit_rate_start, pattern=r"^agent_edit_rate:")
@@ -1388,10 +1766,13 @@ def main():
     app.add_handler(CommandHandler("agent", agent_stats_command))
     app.add_handler(CommandHandler("agent_rate", agent_rate_command))
     app.add_handler(CommandHandler("agent_access", agent_access_command))
+    app.add_handler(CommandHandler("create_instagram_affiliates", create_instagram_affiliates))
 
     app.add_handler(add_conv)
     app.add_handler(search_conv)
     app.add_handler(edit_name_conv)
+    app.add_handler(edit_code_conv)
+    app.add_handler(edit_url_conv)
     app.add_handler(edit_rate_conv)
 
     app.add_handler(CallbackQueryHandler(callback_handler))
