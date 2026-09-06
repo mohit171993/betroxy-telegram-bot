@@ -1695,40 +1695,47 @@ def promoter_report_keyboard(rows, day=1):
     return InlineKeyboardMarkup(buttons)
 
 
+
+def verification_status_word(value, kind):
+    value = value or "pending"
+
+    if kind == "bio":
+        return {
+            "verified": "OK",
+            "missing": "MISSING",
+            "issue": "ISSUE",
+            "pending": "REVIEW",
+        }.get(value, "REVIEW")
+
+    if kind == "only":
+        return {
+            "verified": "NONE",
+            "issue": "EXTRA",
+            "missing": "EXTRA",
+            "pending": "REVIEW",
+        }.get(value, "REVIEW")
+
+    if kind == "story":
+        return {
+            "verified": "LIVE",
+            "missing": "MISSING",
+            "issue": "ISSUE",
+            "pending": "REVIEW",
+        }.get(value, "REVIEW")
+
+    if kind == "story_link":
+        return {
+            "verified": "OK",
+            "missing": "MISSING",
+            "issue": "ISSUE",
+            "pending": "REVIEW",
+        }.get(value, "REVIEW")
+
+    return "REVIEW"
+
+
 def automatic_verification_report_text(rows, day):
     total = len(rows)
-
-    def status_word(value, kind):
-        value = value or "pending"
-        if kind == "bio":
-            return {
-                "verified": "OK",
-                "missing": "MISSING",
-                "issue": "ISSUE",
-                "pending": "REVIEW",
-            }.get(value, "REVIEW")
-        if kind == "only":
-            return {
-                "verified": "NONE",
-                "issue": "EXTRA",
-                "missing": "EXTRA",
-                "pending": "REVIEW",
-            }.get(value, "REVIEW")
-        if kind == "story":
-            return {
-                "verified": "LIVE",
-                "missing": "MISSING",
-                "issue": "ISSUE",
-                "pending": "REVIEW",
-            }.get(value, "REVIEW")
-        if kind == "story_link":
-            return {
-                "verified": "OK",
-                "missing": "MISSING",
-                "issue": "ISSUE",
-                "pending": "REVIEW",
-            }.get(value, "REVIEW")
-        return "REVIEW"
 
     final_counts = {"PASS": 0, "ACTION REQUIRED": 0, "MANUAL REVIEW": 0}
     for r in rows:
@@ -1803,22 +1810,15 @@ def build_verification_pdf(rows, day):
     doc = SimpleDocTemplate(
         output,
         pagesize=landscape(A4),
-        rightMargin=22, leftMargin=22, topMargin=24, bottomMargin=24,
+        rightMargin=22,
+        leftMargin=22,
+        topMargin=24,
+        bottomMargin=24,
         title=f"BETROXY Promoter Compliance Report Day {day}",
         author="BETROXY",
     )
+
     styles = getSampleStyleSheet()
-    small = ParagraphStyle(
-        "small",
-        parent=styles["BodyText"],
-        fontSize=7,
-        leading=9,
-    )
-    small_center = ParagraphStyle(
-        "smallcenter",
-        parent=small,
-        alignment=TA_CENTER,
-    )
     summary_style = ParagraphStyle(
         "summary",
         parent=styles["BodyText"],
@@ -1826,20 +1826,36 @@ def build_verification_pdf(rows, day):
         leading=12,
         spaceAfter=5,
     )
+    small = ParagraphStyle(
+        "small",
+        parent=styles["BodyText"],
+        fontSize=7,
+        leading=9,
+    )
 
     final_counts = {"PASS": 0, "ACTION REQUIRED": 0, "MANUAL REVIEW": 0}
     for r in rows:
         final_counts[verification_final_result(r)] += 1
 
-    checked_values = [verification_last_checked(r) for r in rows if verification_last_checked(r)]
+    checked_values = [
+        verification_last_checked(r)
+        for r in rows
+        if verification_last_checked(r)
+    ]
     newest = max(checked_values) if checked_values else None
-    newest_text = newest.strftime("%d %b %Y %H:%M UTC") if newest else "No completed check yet"
+    newest_text = (
+        newest.strftime("%d %b %Y %H:%M UTC")
+        if newest else "No completed check yet"
+    )
 
     story = [
-        Paragraph(f"BETROXY - Promoter Compliance Report - Day {day}/7", styles["Title"]),
+        Paragraph(
+            f"BETROXY Promoter Compliance Report - Day {day}/7",
+            styles["Title"],
+        ),
         Spacer(1, 6),
         Paragraph(
-            f"<b>Creators:</b> {len(rows)} &nbsp;&nbsp; "
+            f"<b>Total Creators:</b> {len(rows)} &nbsp;&nbsp; "
             f"<b>PASS:</b> {final_counts['PASS']} &nbsp;&nbsp; "
             f"<b>ACTION REQUIRED:</b> {final_counts['ACTION REQUIRED']} &nbsp;&nbsp; "
             f"<b>MANUAL REVIEW:</b> {final_counts['MANUAL REVIEW']}<br/>"
@@ -1847,80 +1863,92 @@ def build_verification_pdf(rows, day):
             summary_style,
         ),
         Paragraph(
-            "<b>Definitions:</b> Bio = assigned Batraxy link present in bio; "
-            "Only = no additional external/promotional bio link; "
-            "Story = active Story confirmed; Link = assigned Batraxy link confirmed in Story.<br/>"
-            "<b>Final:</b> PASS = all checks confirmed; ACTION REQUIRED = confirmed issue/missing item; "
-            "MANUAL REVIEW = automatic checker could not confirm everything.",
+            "<b>How to read the report</b><br/>"
+            "Bio: OK = Batraxy link found | MISSING = not found<br/>"
+            "Extra: NONE = no other bio link | EXTRA = another link found<br/>"
+            "Story: LIVE = active story found | MISSING = no story | REVIEW = checker could not confirm<br/>"
+            "S.Link: OK = Batraxy story link found | ISSUE/MISSING = problem | REVIEW = manual proof needed",
             summary_style,
         ),
         Spacer(1, 6),
     ]
 
     data = [[
-        "Creator / Instagram",
-        "Assigned Batraxy Link",
+        "Creator",
         "Bio",
-        "Only",
+        "Extra",
         "Story",
-        "Story Link",
-        "Final Result",
-        "Last Checked",
+        "S.Link",
+        "Result",
+        "Checked",
     ]]
 
     for r in rows:
-        checked = verification_last_checked(r)
-        checked_text = checked.strftime("%d-%m-%Y %H:%M") if checked else "Not checked"
-        source_url = verification_source_url(r)
-        assigned = f"{PUBLIC_BASE_URL}/{r['slug']}"
         username = str(r.get("instagram_username") or "").strip().lstrip("@")
-        result = verification_final_result(r)
+        source_url = verification_source_url(r)
+        checked = verification_last_checked(r)
+        checked_text = checked.strftime("%d %b %H:%M") if checked else "Not checked"
+
+        final = verification_final_result(r)
+        final_short = {
+            "PASS": "PASS",
+            "ACTION REQUIRED": "FIX",
+            "MANUAL REVIEW": "REVIEW",
+        }[final]
 
         data.append([
             Paragraph(
-                f'<link href="{html.escape(source_url, quote=True)}">@{html.escape(username)}</link>',
+                f'<link href="{html.escape(source_url, quote=True)}">'
+                f'@{html.escape(username)}</link>',
                 small,
             ),
-            Paragraph(
-                f'<link href="{html.escape(assigned, quote=True)}">{html.escape(assigned)}</link>',
-                small,
-            ),
-            str(r.get("bio_status") or "pending").replace("_", " ").title(),
-            str(r.get("only_our_link_status") or "pending").replace("_", " ").title(),
-            str(r.get("story_status") or "pending").replace("_", " ").title(),
-            str(r.get("story_link_status") or "pending").replace("_", " ").title(),
-            result,
+            verification_status_word(r.get("bio_status"), "bio"),
+            verification_status_word(r.get("only_our_link_status"), "only"),
+            verification_status_word(r.get("story_status"), "story"),
+            verification_status_word(r.get("story_link_status"), "story_link"),
+            final_short,
             checked_text,
         ])
 
     table = Table(
         data,
         repeatRows=1,
-        colWidths=[105, 190, 50, 55, 55, 62, 90, 92],
+        colWidths=[190, 75, 75, 75, 75, 75, 95],
     )
     table.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#081C15")),
         ("TEXTCOLOR", (0,0), (-1,0), colors.white),
         ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-        ("FONTSIZE", (0,0), (-1,-1), 7),
-        ("GRID", (0,0), (-1,-1), .35, colors.HexColor("#B9CCC2")),
+        ("FONTSIZE", (0,0), (-1,-1), 8),
+        ("GRID", (0,0), (-1,-1), .45, colors.HexColor("#AFC5BA")),
         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ("ALIGN", (2,1), (-2,-1), "CENTER"),
+        ("ALIGN", (1,1), (-1,-1), "CENTER"),
         ("ROWBACKGROUNDS", (0,1), (-1,-1), [
             colors.HexColor("#F7FBF9"),
             colors.HexColor("#EDF6F1"),
         ]),
-        ("TOPPADDING", (0,0), (-1,-1), 5),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("TOPPADDING", (0,0), (-1,-1), 6),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
     ]))
     story.append(table)
     story.append(Spacer(1, 10))
+
     story.append(Paragraph(
-        "<b>Promoter action:</b> Fix every ACTION REQUIRED item. "
-        "For MANUAL REVIEW, provide a current Story screenshot/proof. "
-        "Creator names and assigned Batraxy URLs in this PDF are clickable.",
+        "<b>Result meaning</b><br/>"
+        "PASS = all required checks confirmed<br/>"
+        "FIX = promoter must correct at least one confirmed issue<br/>"
+        "REVIEW = automatic checker could not confirm everything; send proof",
         summary_style,
     ))
+
+    story.append(Paragraph(
+        "<b>Promoter action</b><br/>"
+        "FIX -> correct the shown issue and send updated proof.<br/>"
+        "REVIEW -> send current Story screenshot/screen recording for manual verification.<br/>"
+        "Creator names in the PDF are clickable and open the creator's source page.",
+        summary_style,
+    ))
+
     doc.build(story)
     output.seek(0)
     return output
