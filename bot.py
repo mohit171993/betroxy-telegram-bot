@@ -56,7 +56,7 @@ if not DATABASE_URL:
 if not ADMIN_ID:
     raise RuntimeError("ADMIN_ID is missing")
 
-BOT_USERNAME = "BetroxyOfficialBot"
+BOT_USERNAME = "BetroxyOfficialBot"  # admin/referral bot; landing CTA uses @BetroxyBot
 
 # Exact Web App URL shown in BotFather for the original Betroxy bot
 APP_URL = "https://betroxy.com/"
@@ -1925,7 +1925,7 @@ def ensure_polished_builtin_theme_once():
     admins remain free to publish another uploaded theme later; restarts will
     not force this theme again.
     """
-    theme_name = "BETROXY Polished Built-in v2"
+    theme_name = "BETROXY Polished Built-in v4"
 
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -1936,18 +1936,19 @@ def ensure_polished_builtin_theme_once():
             existing = cur.fetchone()
 
             if existing:
-                return existing["id"]
+                theme_id = existing["id"]
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO landing_themes (name, index_html, created_by)
+                    VALUES (%s, %s, %s)
+                    RETURNING id
+                    """,
+                    (theme_name, DEFAULT_LANDING_HTML, ADMIN_ID),
+                )
+                theme_id = cur.fetchone()["id"]
 
-            cur.execute(
-                """
-                INSERT INTO landing_themes (name, index_html, created_by)
-                VALUES (%s, %s, %s)
-                RETURNING id
-                """,
-                (theme_name, DEFAULT_LANDING_HTML, ADMIN_ID),
-            )
-            theme_id = cur.fetchone()["id"]
-
+            # Publish v3 for this corrective deployment.
             cur.execute("UPDATE landing_themes SET is_active=FALSE WHERE is_active=TRUE")
             cur.execute(
                 "UPDATE landing_themes SET is_active=TRUE, published_at=NOW() WHERE id=%s",
@@ -2235,11 +2236,8 @@ def outbound_redirect(slug, destination):
     record_outbound_click(slug, destination)
 
     if destination == "telegram":
-        # Preserve the creator/affiliate code when opening the affiliate bot.
-        return redirect(
-            f"https://t.me/{BOT_USERNAME}?start=agent_{link['agent_code']}",
-            code=302,
-        )
+        # Main landing-page Telegram button opens the actual BETROXY product bot.
+        return redirect("https://t.me/BetroxyBot", code=302)
 
     if destination == "casino":
         return redirect("https://t.me/BetroxyBot/casino", code=302)
