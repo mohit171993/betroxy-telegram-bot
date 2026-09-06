@@ -1698,14 +1698,42 @@ def promoter_report_keyboard(rows, day=1):
 def automatic_verification_report_text(rows, day):
     total = len(rows)
 
-    def icon(value):
-        return VERIFY_STATUS_LABEL.get(value, "⏳")
+    def status_word(value, kind):
+        value = value or "pending"
+        if kind == "bio":
+            return {
+                "verified": "OK",
+                "missing": "MISSING",
+                "issue": "ISSUE",
+                "pending": "REVIEW",
+            }.get(value, "REVIEW")
+        if kind == "only":
+            return {
+                "verified": "NONE",
+                "issue": "EXTRA",
+                "missing": "EXTRA",
+                "pending": "REVIEW",
+            }.get(value, "REVIEW")
+        if kind == "story":
+            return {
+                "verified": "LIVE",
+                "missing": "MISSING",
+                "issue": "ISSUE",
+                "pending": "REVIEW",
+            }.get(value, "REVIEW")
+        if kind == "story_link":
+            return {
+                "verified": "OK",
+                "missing": "MISSING",
+                "issue": "ISSUE",
+                "pending": "REVIEW",
+            }.get(value, "REVIEW")
+        return "REVIEW"
 
     final_counts = {"PASS": 0, "ACTION REQUIRED": 0, "MANUAL REVIEW": 0}
     for r in rows:
         final_counts[verification_final_result(r)] += 1
 
-    # Overall report time is the newest result in this report.
     checked_values = [verification_last_checked(r) for r in rows if verification_last_checked(r)]
     newest = max(checked_values) if checked_values else None
     newest_text = newest.strftime("%d %b %Y %H:%M UTC") if newest else "No completed check yet"
@@ -1713,60 +1741,59 @@ def automatic_verification_report_text(rows, day):
     lines = [
         f"📊 <b>BETROXY Promoter Compliance Report — Day {day}/7</b>",
         "",
-        f"<b>Creators:</b> {total}   "
+        f"<b>Total Creators:</b> {total}",
         f"<b>PASS:</b> {final_counts['PASS']}   "
-        f"<b>ACTION:</b> {final_counts['ACTION REQUIRED']}   "
-        f"<b>MANUAL:</b> {final_counts['MANUAL REVIEW']}",
+        f"<b>ACTION REQUIRED:</b> {final_counts['ACTION REQUIRED']}   "
+        f"<b>MANUAL REVIEW:</b> {final_counts['MANUAL REVIEW']}",
         f"<b>Latest check:</b> {newest_text}",
         "",
-        "<b>Final result</b>",
-        "✅ PASS = all required checks confirmed",
-        "🚨 ACTION REQUIRED = missing/incorrect link or another confirmed issue",
-        "🕵️ MANUAL REVIEW = automatic checker could not confirm everything",
+        "<b>How to read the report</b>",
+        "Bio: OK = Batraxy link found | MISSING = not found",
+        "Extra: NONE = no other bio link | EXTRA = another link found",
+        "Story: LIVE = active story found | MISSING = no story | REVIEW = checker could not confirm",
+        "S.Link: OK = Batraxy story link found | ISSUE/MISSING = problem | REVIEW = manual proof needed",
         "",
-        "<b>Columns</b>",
-        "Bio = assigned Batraxy link is in bio",
-        "Only = no additional external/promotional bio link",
-        "Story = active Story confirmed",
-        "Link = assigned Batraxy link confirmed in Story",
-        "",
+        "<b>Creator Compliance Table</b>",
         "<pre>",
-        f"{'Creator':<18} {'B':<2} {'O':<2} {'S':<2} {'L':<2} {'Final':<13} {'Checked':<11}",
-        "-" * 61,
+        "+------------------+---------+-------+---------+---------+--------+",
+        "| Creator          | Bio     | Extra | Story   | S.Link  | Result |",
+        "+------------------+---------+-------+---------+---------+--------+",
     ]
 
-    final_short = {
-        "PASS": "PASS",
-        "ACTION REQUIRED": "ACTION",
-        "MANUAL REVIEW": "MANUAL",
-    }
-
     for r in rows:
-        name = str(r.get("instagram_username") or "")
-        name = name[:17] + ("…" if len(name) > 17 else "")
-        checked = verification_last_checked(r)
-        checked_text = checked.strftime("%d %b %H:%M") if checked else "Not checked"
-        result = verification_final_result(r)
+        username = str(r.get("instagram_username") or "").strip().lstrip("@")
+        display = ("@" + username)
+        if len(display) > 16:
+            display = display[:15] + "…"
+
+        bio = status_word(r.get("bio_status"), "bio")
+        extra = status_word(r.get("only_our_link_status"), "only")
+        story = status_word(r.get("story_status"), "story")
+        slink = status_word(r.get("story_link_status"), "story_link")
+        final = verification_final_result(r)
+        final_short = {
+            "PASS": "PASS",
+            "ACTION REQUIRED": "FIX",
+            "MANUAL REVIEW": "REVIEW",
+        }[final]
+
         lines.append(
-            f"@{name:<17} "
-            f"{icon(r.get('bio_status')):<2} "
-            f"{icon(r.get('only_our_link_status')):<2} "
-            f"{icon(r.get('story_status')):<2} "
-            f"{icon(r.get('story_link_status')):<2} "
-            f"{final_short[result]:<13} "
-            f"{checked_text:<11}"
+            f"| {display:<16} | {bio:<7} | {extra:<5} | {story:<7} | {slink:<7} | {final_short:<6} |"
         )
 
     lines += [
+        "+------------------+---------+-------+---------+---------+--------+",
         "</pre>",
         "",
-        "<b>Status symbols</b>",
-        "✅ Confirmed   ⚠️ Issue   ❌ Missing   ⏳ Manual check needed",
+        "<b>Result meaning</b>",
+        "✅ <b>PASS</b> = all required checks confirmed",
+        "🚨 <b>FIX</b> = promoter must correct at least one confirmed issue",
+        "🕵️ <b>REVIEW</b> = automatic checker could not confirm everything; send proof",
         "",
         "<b>Promoter action</b>",
-        "• 🚨 ACTION: fix the flagged item and send updated proof.",
-        "• 🕵️ MANUAL: send current Story/screenshot proof so it can be verified.",
-        "• Use the buttons below to open each creator page and their assigned Batraxy link.",
+        "• FIX → correct the shown issue and send updated proof.",
+        "• REVIEW → send current Story screenshot/screen recording for manual verification.",
+        "• Use the creator buttons below to open the Instagram page and assigned Batraxy link.",
     ]
     return "\n".join(lines)
 
