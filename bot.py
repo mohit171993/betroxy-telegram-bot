@@ -976,9 +976,10 @@ def campaign_menu():
             ],
             [
                 InlineKeyboardButton("✅ Verification Center", callback_data="verify_home"),
-                InlineKeyboardButton("📄 Download PDF", callback_data="campaign_pdf"),
+                InlineKeyboardButton("📊 Auto Report", callback_data="verify_auto_report:1"),
             ],
             [
+                InlineKeyboardButton("📄 Download PDF", callback_data="campaign_pdf"),
                 InlineKeyboardButton("🎨 Landing Design", callback_data="theme_home"),
             ],
             [InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_home")],
@@ -1586,7 +1587,7 @@ def verification_list_keyboard(rows, day=1, page=0, per_page=8):
         buttons.append(day_buttons)
 
     buttons.append([
-        InlineKeyboardButton("📊 Refresh Report", callback_data=f"verify_auto_report:{day}"),
+        InlineKeyboardButton("📊 Auto Report", callback_data=f"verify_auto_report:{day}"),
         InlineKeyboardButton("💻 Checker Status", callback_data="verify_local_status"),
     ])
     buttons.append([
@@ -1667,7 +1668,7 @@ def automatic_verification_report_text(rows, day):
         table.append(f"{creator:<16} {b:<4} {o:<4} {s:<5} {l:<4}")
 
     return (
-        f"🤖 <b>Automatic Compliance Report — Day {day}/7</b>\n\n"
+        f"📊 <b>BETROXY Auto Compliance Report — Day {day}/7</b>\n\n"
         "<pre>" + html.escape("\n".join(table)) + "</pre>\n"
         f"<b>Total:</b> {total} | "
         f"<b>Compliant:</b> {compliant} | "
@@ -4761,7 +4762,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ <b>Campaign Verification Center</b>\n\n"
             "Track whether each creator has the assigned bio link, only your link, "
             "the agreed Story, and the Story link.\n\n"
-            "Status: ✅ verified  ⚠️ issue  ❌ missing  ⏳ pending\n"
+            "Status: ✅ verified  ⚠️ issue  ❌ missing  ⏳ pending\n\n"
+            "Use <b>📊 Auto Report</b> to see everything in one report.\n"
             "Choose a creator or campaign day:",
             parse_mode=ParseMode.HTML,
             reply_markup=verification_list_keyboard(rows, day=1),
