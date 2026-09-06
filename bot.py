@@ -2932,45 +2932,102 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "campaign_report":
         rows = instagram_tracker_stats()
-        lines = ["📊 <b>Full Campaign Report</b>", ""]
-        for r in rows:
-            lines.append(
-                f"• <b>@{html.escape(str(r['name']))}</b> — "
-                f"{int(r['landing_visits'] or 0)} visits | "
-                f"{int(r['telegram_clicks'] or 0)} bot | "
-                f"{int(r['website_clicks'] or 0)} web | "
-                f"{int(r['deposits'] or 0)} dep"
+        if not rows:
+            await q.message.reply_text(
+                "📊 <b>Full Campaign Report</b>\n\nNo data yet.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=campaign_menu(),
             )
-        await q.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=campaign_menu())
+            return
+
+        table = [
+            f"{'Creator':<20} {'Vis':>4} {'Bot':>4} {'Web':>4} {'Dep':>4}",
+            "-" * 40,
+        ]
+        for r in rows:
+            creator = ("@" + str(r["name"]))[:20]
+            table.append(
+                f"{creator:<20} "
+                f"{int(r['landing_visits'] or 0):>4} "
+                f"{int(r['telegram_clicks'] or 0):>4} "
+                f"{int(r['website_clicks'] or 0):>4} "
+                f"{int(r['deposits'] or 0):>4}"
+            )
+
+        totals = {
+            "vis": sum(int(r["landing_visits"] or 0) for r in rows),
+            "bot": sum(int(r["telegram_clicks"] or 0) for r in rows),
+            "web": sum(int(r["website_clicks"] or 0) for r in rows),
+            "dep": sum(int(r["deposits"] or 0) for r in rows),
+        }
+        table.extend([
+            "-" * 40,
+            f"{'TOTAL':<20} {totals['vis']:>4} {totals['bot']:>4} {totals['web']:>4} {totals['dep']:>4}",
+        ])
+
+        text = (
+            "📊 <b>Full Campaign Report</b>\n\n"
+            "<pre>" + html.escape("\n".join(table)) + "</pre>"
+            f"\n<b>Creators:</b> {len(rows)}"
+        )
+        await q.message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
         return
 
     if data == "campaign_today":
         s = tracker_today_totals()
+        table = [
+            f"{'Metric':<22} {'Value':>10}",
+            "-" * 33,
+            f"{'Landing visits':<22} {int(s['landing_visits'] or 0):>10}",
+            f"{'Unique visitors':<22} {int(s['unique_visitors'] or 0):>10}",
+            f"{'BetroxyBot clicks':<22} {int(s['telegram_clicks'] or 0):>10}",
+            f"{'Website clicks':<22} {int(s['website_clicks'] or 0):>10}",
+            f"{'Bot starts':<22} {int(s['starts'] or 0):>10}",
+            f"{'Registrations':<22} {int(s['registrations'] or 0):>10}",
+            f"{'Deposits':<22} {int(s['deposits'] or 0):>10}",
+            f"{'Deposit amount':<22} {float(s['deposit_amount'] or 0):>10.2f}",
+        ]
         await q.message.reply_text(
             "📅 <b>Today's Campaign</b>\n\n"
-            f"👁 Landing visits: <b>{s['landing_visits']}</b>\n"
-            f"👤 Unique visitors: <b>{s['unique_visitors']}</b>\n"
-            f"✈️ BetroxyBot clicks: <b>{s['telegram_clicks']}</b>\n"
-            f"🌐 Betroxy.com clicks: <b>{s['website_clicks']}</b>\n"
-            f"🚀 Bot starts captured: <b>{s['starts']}</b>\n"
-            f"📝 Registrations: <b>{s['registrations']}</b>\n"
-            f"💳 Deposits: <b>{s['deposits']}</b>\n"
-            f"💰 Deposit amount: <b>{float(s['deposit_amount'] or 0):,.2f}</b>",
-            parse_mode=ParseMode.HTML, reply_markup=campaign_menu()
+            "<pre>" + html.escape("\n".join(table)) + "</pre>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
         )
         return
 
     if data == "campaign_top":
         rows = instagram_tracker_stats()
-        lines = ["🏆 <b>Top Performing Pages</b>", ""]
-        for i, r in enumerate(rows[:10], 1):
-            lines.append(
-                f"{i}. <b>@{html.escape(str(r['name']))}</b> — "
-                f"{int(r['landing_visits'] or 0)} visits | "
-                f"{int(r['telegram_clicks'] or 0)} bot | "
-                f"{int(r['website_clicks'] or 0)} web"
+        if not rows:
+            await q.message.reply_text(
+                "🏆 <b>Top Performing Pages</b>\n\nNo data yet.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=campaign_menu(),
             )
-        await q.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=campaign_menu())
+            return
+
+        table = [
+            f"{'#':<2} {'Creator':<19} {'Vis':>4} {'Bot':>4} {'Web':>4}",
+            "-" * 39,
+        ]
+        for i, r in enumerate(rows[:10], 1):
+            creator = ("@" + str(r["name"]))[:19]
+            table.append(
+                f"{i:<2} {creator:<19} "
+                f"{int(r['landing_visits'] or 0):>4} "
+                f"{int(r['telegram_clicks'] or 0):>4} "
+                f"{int(r['website_clicks'] or 0):>4}"
+            )
+
+        await q.message.reply_text(
+            "🏆 <b>Top Performing Pages</b>\n\n"
+            "<pre>" + html.escape("\n".join(table)) + "</pre>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
         return
 
     if data == "campaign_links":
