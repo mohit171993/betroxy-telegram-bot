@@ -1,4 +1,5 @@
 import os
+import asyncio
 import csv
 import io
 import logging
@@ -10,9 +11,10 @@ import mimetypes
 import html
 import json
 import time
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, parse_qs, unquote
 from datetime import datetime, timezone
 from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import Flask, jsonify, request, redirect, Response
 
@@ -52,6 +54,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 TRACKER_API_SECRET = os.getenv("TRACKER_API_SECRET", "")
+APIFY_TOKEN = os.getenv("APIFY_TOKEN", "").strip()
+APIFY_PROFILE_ACTOR_ID = os.getenv("APIFY_PROFILE_ACTOR_ID", "apify~instagram-profile-scraper").strip()
+APIFY_STORY_ACTOR_ID = os.getenv("APIFY_STORY_ACTOR_ID", "data-slayer~instagram-stories-scraper").strip()
+APIFY_REQUEST_TIMEOUT = int(os.getenv("APIFY_REQUEST_TIMEOUT", "300"))
 PORT = int(os.getenv("PORT", "8080"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://www.batraxy.com").rstrip("/")
 BETROXY_BOT_URL = os.getenv("BETROXY_BOT_URL", "https://t.me/BetroxyBot")
@@ -941,47 +947,55 @@ def admin_menu():
 
 
 def campaign_menu():
+    """
+    Telegram does not support custom button colours, so the dashboard uses a
+    consistent visual scheme:
+      🟢 verification / healthy
+      🟡 review / reports
+      🔵 campaign tools
+      🔴 destructive actions
+      ⚙️ settings / utility
+    """
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("📊 Full Report", callback_data="campaign_report"),
+                InlineKeyboardButton("🟢 Run Smart Check", callback_data="verify_request_local_run"),
+                InlineKeyboardButton("🟡 Auto Report", callback_data="verify_auto_report:1"),
+            ],
+            [
+                InlineKeyboardButton("✅ Verification Center", callback_data="verify_home"),
+                InlineKeyboardButton("📄 Compliance PDF", callback_data="verify_pdf:1"),
+            ],
+            [
+                InlineKeyboardButton("📊 Campaign Report", callback_data="campaign_report"),
                 InlineKeyboardButton("📅 Today", callback_data="campaign_today"),
             ],
             [
                 InlineKeyboardButton("🏆 Top Pages", callback_data="campaign_top"),
-                InlineKeyboardButton("🔄 Refresh", callback_data="campaign_home"),
-            ],
-            [
                 InlineKeyboardButton("🔗 Creator Links", callback_data="campaign_links"),
-                InlineKeyboardButton("➕ Add 1 Page", callback_data="campaign_add_single"),
             ],
             [
-                InlineKeyboardButton("⛔ Disable by Link", callback_data="campaign_disable_by_link"),
-                InlineKeyboardButton("🗑 Delete by Link", callback_data="campaign_delete_by_link"),
+                InlineKeyboardButton("➕ Add Creator", callback_data="campaign_add_single"),
+                InlineKeyboardButton("📚 Bulk Create", callback_data="campaign_add_bulk"),
             ],
             [
-                InlineKeyboardButton("📚 Bulk Create Links", callback_data="campaign_add_bulk"),
-                InlineKeyboardButton("✅ Sync Final Promoted Links", callback_data="campaign_sync_final"),
-            ],
-            [
+                InlineKeyboardButton("✅ Sync Final Links", callback_data="campaign_sync_final"),
                 InlineKeyboardButton("📥 Export CSV", callback_data="campaign_export"),
             ],
             [
-                InlineKeyboardButton("🔄 Run Bio Check Now", callback_data="verify_request_local_run"),
-                InlineKeyboardButton("📊 Auto Report", callback_data="verify_auto_report:1"),
+                InlineKeyboardButton("🔴 Disable Link", callback_data="campaign_disable_by_link"),
+                InlineKeyboardButton("🗑 Delete Link", callback_data="campaign_delete_by_link"),
             ],
             [
-                InlineKeyboardButton("✅ Verification Center", callback_data="verify_home"),
-                InlineKeyboardButton("💻 Checker Status", callback_data="verify_local_status"),
-            ],
-            [
-                InlineKeyboardButton("📄 Download PDF", callback_data="campaign_pdf"),
+                InlineKeyboardButton("⚙️ Checker Status", callback_data="verify_hybrid_status"),
                 InlineKeyboardButton("🎨 Landing Design", callback_data="theme_home"),
             ],
-            [InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_home")],
+            [
+                InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="campaign_home"),
+                InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_home"),
+            ],
         ]
     )
-
 
 
 VERIFY_STATUS_LABEL = {
@@ -1316,6 +1330,447 @@ def save_auto_verification_result(
         conn.commit()
 
 
+
+def _unwrap_instagram_redirect(value):
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    try:
+        p = urlparse(value)
+        host = (p.netloc or "").lower()
+        if host.startswith("l.") and host.endswith("instagram.com"):
+            qs = parse_qs(p.query)
+            target = (qs.get("u") or [""])[0]
+            if target:
+                return unquote(target)
+    except Exception:
+        pass
+    return value
+
+
+def _apify_norm(value):
+    return _normalized_url_for_compare(_unwrap_instagram_redirect(value))
+
+
+def _apify_actor_sync(actor_id, payload):
+    if not APIFY_TOKEN:
+        raise RuntimeError("APIFY_TOKEN is not configured in Railway.")
+    actor_id = str(actor_id or "").strip().replace("/", "~")
+    r = requests.post(
+        f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items",
+        params={"token": APIFY_TOKEN, "clean": "true", "format": "json"},
+        json=payload,
+        timeout=APIFY_REQUEST_TIMEOUT,
+    )
+    if not r.ok:
+        raise RuntimeError(f"Apify {actor_id} HTTP {r.status_code}: {(r.text or '')[:800]}")
+    data = r.json()
+    if not isinstance(data, list):
+        raise RuntimeError(f"Unexpected response from {actor_id}")
+    return data
+
+
+def _profile_username(item):
+    if item.get("username"):
+        return str(item["username"]).strip().lstrip("@").lower()
+    u = str(item.get("inputUrl") or item.get("url") or "")
+    try:
+        p = urlparse(u)
+        path = p.path.strip("/")
+        return path.split("/", 1)[0].lower() if path else ""
+    except Exception:
+        return ""
+
+
+def _story_username(item):
+    for value in (
+        item.get("username"),
+        item.get("ownerUsername"),
+        (item.get("owner") or {}).get("username") if isinstance(item.get("owner"), dict) else None,
+        (item.get("user") or {}).get("username") if isinstance(item.get("user"), dict) else None,
+    ):
+        if value:
+            return str(value).strip().lstrip("@").lower()
+    return ""
+
+
+def _profile_links(item):
+    vals = []
+    for k in ("externalUrl", "external_url"):
+        if item.get(k):
+            vals.append(item[k])
+    for k in ("externalUrls", "bioLinks", "bio_links"):
+        x = item.get(k)
+        if isinstance(x, list):
+            for e in x:
+                if isinstance(e, str):
+                    vals.append(e)
+                elif isinstance(e, dict):
+                    for f in ("url", "external_url", "link_url", "lynx_url"):
+                        if e.get(f):
+                            vals.append(e[f])
+    out, seen = [], set()
+    for v in vals:
+        dest = _unwrap_instagram_redirect(v)
+        n = _apify_norm(dest)
+        if n and n not in seen:
+            seen.add(n)
+            out.append(dest)
+    return out
+
+
+def _story_links(item):
+    vals = []
+    for k in ("story_link_url", "storyLinkUrl", "external_url", "externalUrl"):
+        if item.get(k):
+            vals.append(item[k])
+    stickers = item.get("story_link_stickers") or item.get("storyLinkStickers") or []
+    if isinstance(stickers, list):
+        for s in stickers:
+            if not isinstance(s, dict):
+                continue
+            sl = s.get("story_link") or s.get("storyLink") or {}
+            if isinstance(sl, dict):
+                for f in ("url", "display_url", "displayUrl"):
+                    if sl.get(f):
+                        vals.append(sl[f])
+    out, seen = [], set()
+    for v in vals:
+        dest = _unwrap_instagram_redirect(v)
+        n = _apify_norm(dest)
+        if n and n not in seen:
+            seen.add(n)
+            out.append(dest)
+    return out
+
+
+
+def _hybrid_pending_targets():
+    """
+    Return only active Instagram creators whose CURRENT campaign-day still has
+    at least one pending field after the browser checker has posted results.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT cl.*
+                FROM campaign_links cl
+                WHERE cl.is_active=TRUE
+                  AND LOWER(COALESCE(cl.source_type,'instagram'))='instagram'
+                ORDER BY cl.id
+                """
+            )
+            links = cur.fetchall()
+
+    out = []
+    for cl in links:
+        day = current_campaign_day(cl)
+        v = get_verification_row(cl["id"], day)
+        pending = {
+            "bio": (v.get("bio_status") or "pending") == "pending",
+            "only": (v.get("only_our_link_status") or "pending") == "pending",
+            "story": (v.get("story_status") or "pending") == "pending",
+            "story_link": (v.get("story_link_status") or "pending") == "pending",
+        }
+        if any(pending.values()):
+            out.append((cl, day, v, pending))
+    return out
+
+
+def run_apify_fallback_for_pending():
+    """
+    Paid API is used ONLY for unresolved browser fields.
+    Clear browser PASS/FIX results are never overwritten by Apify.
+    """
+    pending_rows = _hybrid_pending_targets()
+    if not pending_rows:
+        return {
+            "fallback_creators": 0,
+            "profile_calls": 0,
+            "story_calls": 0,
+            "profile_records": 0,
+            "story_records": 0,
+            "remaining_review": 0,
+        }
+
+    if not APIFY_TOKEN:
+        return {
+            "fallback_creators": len(pending_rows),
+            "profile_calls": 0,
+            "story_calls": 0,
+            "profile_records": 0,
+            "story_records": 0,
+            "remaining_review": len(pending_rows),
+            "warning": "APIFY_TOKEN missing; unresolved browser fields remain REVIEW.",
+        }
+
+    profile_names = sorted({
+        str(cl["instagram_username"]).strip().lstrip("@")
+        for cl, day, v, p in pending_rows if p["bio"] or p["only"]
+    })
+    story_names = sorted({
+        str(cl["instagram_username"]).strip().lstrip("@")
+        for cl, day, v, p in pending_rows if p["story"] or p["story_link"]
+    })
+
+    profile_items = []
+    story_items = []
+
+    # One Apify account is enough. Calls are sequential, not parallel.
+    if profile_names:
+        profile_items = _apify_actor_sync(
+            APIFY_PROFILE_ACTOR_ID,
+            {"usernames": profile_names},
+        )
+
+    if story_names:
+        story_items = _apify_actor_sync(
+            APIFY_STORY_ACTOR_ID,
+            {"usernames": story_names},
+        )
+
+    pmap = {}
+    for item in profile_items:
+        if isinstance(item, dict):
+            u = _profile_username(item)
+            if u:
+                pmap[u] = item
+
+    smap = {}
+    for item in story_items:
+        if isinstance(item, dict):
+            u = _story_username(item)
+            if u:
+                smap.setdefault(u, []).append(item)
+
+    for cl, day, old_v, pending in pending_rows:
+        username = str(cl["instagram_username"]).strip().lstrip("@")
+        key = username.lower()
+        assigned = f"{PUBLIC_BASE_URL}/{cl['slug']}"
+        fields = {}
+        details = []
+
+        if pending["bio"] or pending["only"]:
+            profile = pmap.get(key)
+            if profile is not None:
+                links = _profile_links(profile)
+                normalized = {_apify_norm(x) for x in links if _apify_norm(x)}
+                target = _apify_norm(assigned)
+                if pending["bio"]:
+                    fields["bio_status"] = "verified" if target in normalized else "missing"
+                if pending["only"]:
+                    fields["only_our_link_status"] = "verified" if normalized == {target} else "issue"
+                fields["detected_bio_links"] = json.dumps(links, ensure_ascii=False)
+                details.append("Apify profile fallback completed")
+
+        if pending["story"] or pending["story_link"]:
+            stories = smap.get(key, [])
+            if stories:
+                links = []
+                for s in stories:
+                    links.extend(_story_links(s))
+                if pending["story"]:
+                    fields["story_status"] = "verified"
+                if pending["story_link"]:
+                    fields["story_link_status"] = (
+                        "verified"
+                        if any(_apify_norm(x) == _apify_norm(assigned) for x in links)
+                        else "issue"
+                    )
+                fields["detected_story_count"] = len(stories)
+                details.append(f"Apify Story fallback completed ({len(stories)} active item(s))")
+            else:
+                # If profile was returned, we know the account exists; zero active
+                # stories from the Story actor is treated as MISSING.
+                account_exists = (key in pmap) or not (pending["bio"] or pending["only"])
+                if account_exists:
+                    if pending["story"]:
+                        fields["story_status"] = "missing"
+                    if pending["story_link"]:
+                        fields["story_link_status"] = "missing"
+                    details.append("Apify Story fallback returned no active Story")
+
+        if fields:
+            set_parts = []
+            params = []
+            for name in ("bio_status", "only_our_link_status", "story_status", "story_link_status"):
+                if name in fields:
+                    set_parts.append(f"{name}=%s")
+                    params.append(fields[name])
+            if "detected_bio_links" in fields:
+                set_parts.append("detected_bio_links=%s")
+                params.append(fields["detected_bio_links"])
+            if "detected_story_count" in fields:
+                set_parts.append("detected_story_count=%s")
+                params.append(fields["detected_story_count"])
+
+            set_parts += [
+                "auto_checked_at=NOW()",
+                "checked_at=NOW()",
+                "auto_check_status='checked'",
+                "checker_mode='hybrid_browser+apify'",
+                "auto_check_detail=%s",
+            ]
+            existing = str(old_v.get("auto_check_detail") or "")
+            params.append((existing + " | " + " | ".join(details))[-3900:])
+            params.extend([cl["id"], day])
+
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        UPDATE campaign_verification
+                        SET {", ".join(set_parts)}
+                        WHERE campaign_link_id=%s AND campaign_day=%s
+                        """,
+                        params,
+                    )
+                conn.commit()
+
+    remaining = len(_hybrid_pending_targets())
+    return {
+        "fallback_creators": len(pending_rows),
+        "profile_calls": 1 if profile_names else 0,
+        "story_calls": 1 if story_names else 0,
+        "profile_records": len(profile_items),
+        "story_records": len(story_items),
+        "remaining_review": remaining,
+    }
+
+
+def _finish_hybrid_run_in_background(token, browser_summary):
+    try:
+        result = run_apify_fallback_for_pending()
+        summary = (
+            f"{browser_summary} | "
+            f"Apify fallback creators={result.get('fallback_creators', 0)}, "
+            f"profile_call={result.get('profile_calls', 0)}, "
+            f"story_call={result.get('story_calls', 0)}, "
+            f"remaining_review={result.get('remaining_review', 0)}"
+        )[:3900]
+        status = "completed"
+    except Exception as exc:
+        logger.exception("Hybrid Apify fallback failed")
+        summary = f"{browser_summary} | Apify fallback error: {type(exc).__name__}: {exc}"[:3900]
+        status = "completed_with_warning"
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE verifier_control
+                SET status=%s,
+                    completed_at=NOW(),
+                    result_summary=%s
+                WHERE id=1 AND run_token=%s
+                """,
+                (status, summary, token),
+            )
+        conn.commit()
+
+
+def run_apify_verification_once(day=1):
+    """
+    MANUAL ONLY. This function is called only from the Telegram
+    'Run Bio Check Now' button. No schedule/background polling is created.
+    """
+    if not APIFY_TOKEN:
+        raise RuntimeError("APIFY_TOKEN is missing in Railway Variables.")
+
+    day = max(1, min(int(day), 7))
+    rows = [r for r in list_campaign_links()
+            if (r.get("source_type") or "instagram").lower() == "instagram"]
+    usernames = [str(r["instagram_username"]).strip().lstrip("@") for r in rows]
+
+    started = time.time()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fp = pool.submit(_apify_actor_sync, APIFY_PROFILE_ACTOR_ID, {"usernames": usernames})
+        fs = pool.submit(_apify_actor_sync, APIFY_STORY_ACTOR_ID, {"usernames": usernames})
+        profile_items = fp.result()
+        story_items = fs.result()
+
+    pmap = {}
+    for item in profile_items:
+        if isinstance(item, dict):
+            u = _profile_username(item)
+            if u:
+                pmap[u] = item
+
+    smap = {}
+    for item in story_items:
+        if isinstance(item, dict):
+            u = _story_username(item)
+            if u:
+                smap.setdefault(u, []).append(item)
+
+    for row in rows:
+        username = str(row["instagram_username"]).strip().lstrip("@")
+        key = username.lower()
+        assigned = f"{PUBLIC_BASE_URL}/{row['slug']}"
+
+        profile = pmap.get(key)
+        bio_status = only_status = None
+        bio_links = []
+
+        if profile is not None:
+            bio_links = _profile_links(profile)
+            normalized = {_apify_norm(x) for x in bio_links if _apify_norm(x)}
+            target = _apify_norm(assigned)
+            bio_status = "verified" if target in normalized else "missing"
+            only_status = "verified" if normalized == {target} else "issue"
+
+        stories = smap.get(key, [])
+        if stories:
+            story_status = "verified"
+            links = []
+            for s in stories:
+                links.extend(_story_links(s))
+            story_link_status = (
+                "verified"
+                if any(_apify_norm(x) == _apify_norm(assigned) for x in links)
+                else "issue"
+            )
+        else:
+            story_status = "missing" if profile is not None else None
+            story_link_status = "pending" if profile is not None else None
+
+        save_auto_verification_result(
+            row["id"],
+            day,
+            bio_status=bio_status,
+            only_status=only_status,
+            story_status=story_status,
+            story_link_status=story_link_status,
+            auto_status="checked",
+            detail=(
+                f"Apify manual check. Bio={bio_status or 'unknown'}; "
+                f"Extra={only_status or 'unknown'}; Story={story_status or 'unknown'}; "
+                f"StoryLink={story_link_status or 'unknown'}; "
+                f"stories={len(stories)}"
+            ),
+            bio_links=bio_links,
+            story_count=len(stories),
+            checker_mode="apify",
+        )
+
+    out_rows = verification_summary_rows(day)
+    totals = {"PASS": 0, "ACTION REQUIRED": 0, "MANUAL REVIEW": 0}
+    for r in out_rows:
+        totals[verification_final_result(r)] += 1
+
+    return {
+        "checked": len(rows),
+        "profile_records": len(profile_items),
+        "story_records": len(story_items),
+        "seconds": round(time.time() - started, 1),
+        "pass_count": totals["PASS"],
+        "issue_count": totals["ACTION REQUIRED"],
+        "manual_count": totals["MANUAL REVIEW"],
+    }
+
+
 def run_free_instagram_check_for_link(row):
     source = (row.get("source_type") or "instagram").lower()
     if source != "instagram":
@@ -1583,8 +2038,12 @@ def verification_list_keyboard(rows, day=1, page=0, per_page=8):
         buttons.append(day_buttons)
 
     buttons.append([
+        InlineKeyboardButton("🟢 Run Smart Check", callback_data="verify_request_local_run"),
         InlineKeyboardButton("📊 Auto Report", callback_data=f"verify_auto_report:{day}"),
-        InlineKeyboardButton("💻 Checker Status", callback_data="verify_local_status"),
+    ])
+    buttons.append([
+        InlineKeyboardButton("⚙️ Hybrid Status", callback_data="verify_hybrid_status"),
+        InlineKeyboardButton("☁️ Apify Status", callback_data="verify_apify_status"),
     ])
     buttons.append([
         InlineKeyboardButton("📄 Compliance PDF", callback_data=f"verify_pdf:{day}"),
@@ -1746,7 +2205,7 @@ def automatic_verification_report_text(rows, day):
     newest_text = newest.strftime("%d %b %Y %H:%M UTC") if newest else "No completed check yet"
 
     lines = [
-        f"📊 <b>BETROXY Promoter Compliance Report — Day {day}/7</b>",
+        f"🟡 <b>BETROXY SMART COMPLIANCE — DAY {day}/7</b>",
         "",
         f"<b>Total Creators:</b> {total}",
         f"<b>PASS:</b> {final_counts['PASS']}   "
@@ -1754,7 +2213,7 @@ def automatic_verification_report_text(rows, day):
         f"<b>MANUAL REVIEW:</b> {final_counts['MANUAL REVIEW']}",
         f"<b>Latest check:</b> {newest_text}",
         "",
-        "<b>How to read the report</b>",
+        "<b>Traffic-light guide</b>",
         "Bio: OK = Batraxy link found | MISSING = not found",
         "Extra: NONE = no other bio link | EXTRA = another link found",
         "Story: LIVE = active story found | MISSING = no story | REVIEW = checker could not confirm",
@@ -1773,10 +2232,10 @@ def automatic_verification_report_text(rows, day):
         if len(display) > 16:
             display = display[:15] + "…"
 
-        bio = status_word(r.get("bio_status"), "bio")
-        extra = status_word(r.get("only_our_link_status"), "only")
-        story = status_word(r.get("story_status"), "story")
-        slink = status_word(r.get("story_link_status"), "story_link")
+        bio = verification_status_word(r.get("bio_status"), "bio")
+        extra = verification_status_word(r.get("only_our_link_status"), "only")
+        story = verification_status_word(r.get("story_status"), "story")
+        slink = verification_status_word(r.get("story_link_status"), "story_link")
         final = verification_final_result(r)
         final_short = {
             "PASS": "PASS",
@@ -1793,9 +2252,9 @@ def automatic_verification_report_text(rows, day):
         "</pre>",
         "",
         "<b>Result meaning</b>",
-        "✅ <b>PASS</b> = all required checks confirmed",
-        "🚨 <b>FIX</b> = promoter must correct at least one confirmed issue",
-        "🕵️ <b>REVIEW</b> = automatic checker could not confirm everything; send proof",
+        "🟢 <b>PASS</b> = all required checks confirmed",
+        "🔴 <b>FIX</b> = promoter must correct at least one confirmed issue",
+        "🟡 <b>REVIEW</b> = browser + fallback could not confirm everything",
         "",
         "<b>Promoter action</b>",
         "• FIX → correct the shown issue and send updated proof.",
@@ -2621,8 +3080,55 @@ def resolve_or_create_final_promoted_links(raw_text):
 
 
 def request_local_verifier_run():
+    """
+    One manual click starts one smart verification cycle.
+    Browser is primary; Apify is fallback only for fields the browser cannot
+    confirm. No scheduled Apify usage is created.
+    """
     token = secrets.token_hex(16)
+
+    # Reset only the current campaign-day rows for active Instagram creators.
+    # This prevents old/stale PASS/FIX values from hiding a browser UNKNOWN.
+    active_rows = []
     with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM campaign_links
+                WHERE is_active=TRUE
+                  AND LOWER(COALESCE(source_type,'instagram'))='instagram'
+                ORDER BY id
+                """
+            )
+            active_rows = cur.fetchall()
+
+        for r in active_rows:
+            day = current_campaign_day(r)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO campaign_verification
+                        (campaign_link_id, campaign_day,
+                         bio_status, only_our_link_status,
+                         story_status, story_link_status,
+                         auto_check_status, checker_mode)
+                    VALUES (%s,%s,'pending','pending','pending','pending','pending','hybrid_waiting')
+                    ON CONFLICT (campaign_link_id, campaign_day)
+                    DO UPDATE SET
+                        bio_status='pending',
+                        only_our_link_status='pending',
+                        story_status='pending',
+                        story_link_status='pending',
+                        auto_check_status='pending',
+                        auto_check_detail='Waiting for 3-worker browser check',
+                        checker_mode='hybrid_waiting',
+                        detected_bio_links='[]',
+                        detected_story_count=0
+                    """,
+                    (r["id"], day),
+                )
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -4050,8 +4556,7 @@ def verifier_complete():
             cur.execute(
                 """
                 UPDATE verifier_control
-                SET status='completed',
-                    completed_at=NOW(),
+                SET status='apify_fallback',
                     result_summary=%s
                 WHERE id=1 AND run_token=%s
                 RETURNING id
@@ -4063,7 +4568,20 @@ def verifier_complete():
 
     if not row:
         return jsonify({"ok": False, "error": "run token not found"}), 404
-    return jsonify({"ok": True})
+
+    # Return immediately to the Windows bridge. Paid fallback happens only for
+    # pending browser fields and therefore cannot block the listener.
+    Thread(
+        target=_finish_hybrid_run_in_background,
+        args=(token, summary),
+        daemon=True,
+    ).start()
+
+    return jsonify({
+        "ok": True,
+        "status": "apify_fallback",
+        "message": "Browser finished. Apify fallback started only for unresolved fields.",
+    })
 
 
 @tracker_api.get("/api/verifier/status")
@@ -5240,13 +5758,140 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-    if data == "verify_request_local_run":
-        control = request_local_verifier_run()
+    if data.startswith("verify_apify_run:"):
+        day = int(data.split(":", 1)[1])
+
+        if not APIFY_TOKEN:
+            await q.message.reply_text(
+                "❌ <b>Apify is not connected.</b>\n\n"
+                "Add <code>APIFY_TOKEN</code> in Railway Variables first.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=campaign_menu(),
+            )
+            return
+
         await q.message.reply_text(
-            "🔄 <b>Bio check requested.</b>\n\n"
-            "The request has been queued for your local/VPS checker.\n"
-            "As soon as <code>RUN_REMOTE_LISTENER.bat</code> is running, it will start the check automatically.\n\n"
-            "After it finishes, open <b>📊 Auto Report</b> for the latest results.",
+            "☁️ <b>Instagram verification started.</b>\n\n"
+            "This check runs only because you pressed <b>Run Bio Check Now</b>.\n"
+            "There is no hourly/automatic Apify schedule, so no API records are "
+            "used while you are not running a check.",
+            parse_mode=ParseMode.HTML,
+        )
+
+        try:
+            result = await asyncio.to_thread(run_apify_verification_once, day)
+        except Exception as exc:
+            logging.exception("Apify verification failed")
+            await q.message.reply_text(
+                f"❌ <b>API check failed</b>\n\n<code>{html.escape(str(exc)[:1400])}</code>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=campaign_menu(),
+            )
+            return
+
+        rows = verification_summary_rows(day)
+        await q.message.reply_text(
+            "✅ <b>API check complete</b>\n\n"
+            f"Creators: <b>{result['checked']}</b>\n"
+            f"Profile records: <b>{result['profile_records']}</b>\n"
+            f"Story records: <b>{result['story_records']}</b>\n"
+            f"Time: <b>{result['seconds']} sec</b>\n\n"
+            f"PASS: <b>{result['pass_count']}</b>\n"
+            f"ACTION REQUIRED: <b>{result['issue_count']}</b>\n"
+            f"MANUAL REVIEW: <b>{result['manual_count']}</b>",
+            parse_mode=ParseMode.HTML,
+        )
+        await q.message.reply_text(
+            automatic_verification_report_text(rows, day),
+            parse_mode=ParseMode.HTML,
+            reply_markup=promoter_report_keyboard(rows, day=day),
+        )
+        return
+
+    if data == "verify_apify_status":
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FILTER (
+                               WHERE auto_checked_at >= NOW() - INTERVAL '90 minutes'
+                                 AND checker_mode='apify'
+                           ) AS recent,
+                           MAX(auto_checked_at) FILTER (
+                               WHERE checker_mode='apify'
+                           ) AS last_check
+                    FROM campaign_verification
+                    """
+                )
+                s = cur.fetchone()
+
+        last = s.get("last_check")
+        last_text = last.strftime("%d %b %Y %H:%M UTC") if last else "Never"
+        await q.message.reply_text(
+            "☁️ <b>Apify Checker Status</b>\n\n"
+            f"Token: <b>{'✅ Configured' if APIFY_TOKEN else '❌ Missing'}</b>\n"
+            f"Last API check: <b>{last_text}</b>\n"
+            f"Creators updated in last 90 min: <b>{int(s.get('recent') or 0)}</b>\n\n"
+            "Mode: <b>Manual only</b>\n"
+            "Apify runs only when you press <b>Run Bio Check Now</b>.\n"
+            "No automatic schedule is enabled.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
+        return
+
+    if data == "verify_request_local_run":
+        request_local_verifier_run()
+        await q.message.reply_text(
+            "🟢 <b>Smart Check requested</b>\n\n"
+            "1) Browser checker runs <b>3 creators at the same time</b>.\n"
+            "2) Story gets a maximum of <b>2 full attempts</b>.\n"
+            "3) Clear browser results are kept.\n"
+            "4) <b>Apify is called only for unresolved fields</b>.\n"
+            "5) Auto Report + PDF use the merged final result.\n\n"
+            "No scheduled Apify check is enabled.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
+        return
+
+    if data == "verify_hybrid_status":
+        control = get_local_verifier_control() or {}
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (
+                            WHERE auto_checked_at >= NOW() - INTERVAL '90 minutes'
+                              AND checker_mode LIKE 'hybrid%'
+                        ) AS hybrid_recent,
+                        COUNT(*) FILTER (
+                            WHERE auto_checked_at >= NOW() - INTERVAL '90 minutes'
+                              AND checker_mode='local_browser'
+                        ) AS browser_recent
+                    FROM campaign_verification
+                    """
+                )
+                s = cur.fetchone()
+
+        state = str(control.get("status") or "idle")
+        friendly = {
+            "requested": "🟡 Waiting for browser listener",
+            "running": "🔵 Browser checker running",
+            "apify_fallback": "☁️ Browser finished; Apify fallback running",
+            "completed": "🟢 Complete",
+            "completed_with_warning": "🟠 Complete with warning",
+        }.get(state, "⚪ Idle")
+
+        await q.message.reply_text(
+            "⚙️ <b>BETROXY Smart Checker</b>\\n\\n"
+            f"Status: <b>{friendly}</b>\\n"
+            "Browser workers: <b>3</b>\\n"
+            "Story attempts: <b>2 maximum</b>\\n"
+            "Apify mode: <b>Fallback only</b>\\n"
+            f"Apify token: <b>{'✅ Configured' if APIFY_TOKEN else '❌ Missing'}</b>\\n\\n"
+            "<b>Cost rule:</b> Clear browser results never call Apify.",
             parse_mode=ParseMode.HTML,
             reply_markup=campaign_menu(),
         )
