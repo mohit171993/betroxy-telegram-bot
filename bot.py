@@ -1506,7 +1506,7 @@ def record_landing_visit(slug):
 
 def record_outbound_click(slug, destination):
     link = campaign_link_by_slug(slug)
-    if not link or destination not in {"telegram", "website"}:
+    if not link or destination not in {"telegram", "website", "casino", "sportsbook", "popular", "promotions"}:
         return False
     fingerprint, _ = _visitor_fingerprint()
     with get_db() as conn:
@@ -1805,28 +1805,134 @@ def inject_theme(theme, link, preview=False):
 
 
 DEFAULT_LANDING_HTML = """<!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BETROXY</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#06140f">
+<title>BETROXY — Official Access</title>
 <style>
-body{margin:0;background:#07110d;color:#fff;font-family:Arial,sans-serif;min-height:100vh;display:grid;place-items:center}
-.card{width:min(92vw,520px);padding:34px;border:1px solid #1f5c3e;border-radius:24px;background:#0a1812;box-shadow:0 20px 70px #0008;text-align:center}
-.logo{font-size:38px;font-weight:900;letter-spacing:2px}.tag{opacity:.75;margin:8px 0 30px}
-.btn{display:block;text-decoration:none;padding:17px 20px;margin:14px 0;border-radius:14px;font-weight:800}
-.tg{background:#21c77a;color:#04100a}.web{background:#fff;color:#07110d}.small{opacity:.55;font-size:12px;margin-top:25px}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;font-family:Inter,Arial,Helvetica,sans-serif;background:#04110c;color:#fff}
+body{
+  min-height:100vh;
+  background:
+    radial-gradient(circle at 80% 15%,rgba(32,211,132,.13),transparent 34%),
+    radial-gradient(circle at 12% 85%,rgba(31,157,104,.10),transparent 32%),
+    linear-gradient(145deg,#020b08 0%,#061810 52%,#03100b 100%);
+}
+.page{width:min(100%,760px);margin:0 auto;padding:22px 18px 34px}
+.source{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:8px 12px;border-radius:999px;
+  background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);
+  color:#c9d8d1;font-size:12px;font-weight:700;letter-spacing:.1px
+}
+.dot{width:7px;height:7px;border-radius:50%;background:#22dc8a;box-shadow:0 0 16px #22dc8a}
+.hero{text-align:center;padding:28px 8px 22px}
+.logo{
+  font-size:clamp(40px,9vw,68px);line-height:.95;font-weight:950;letter-spacing:-2px;
+  text-shadow:0 10px 35px rgba(0,0,0,.35)
+}
+.logo .o{color:#20e39a}
+.kicker{
+  margin-top:12px;color:#80efbd;font-weight:800;font-size:12px;
+  letter-spacing:2.2px;text-transform:uppercase
+}
+.hero h1{font-size:clamp(27px,6vw,43px);margin:18px 0 8px;letter-spacing:-1px}
+.hero p{margin:0 auto;color:#a8bbb2;font-size:15px;max-width:520px;line-height:1.55}
+.trust{
+  margin:18px auto 0;display:flex;justify-content:center;gap:10px;flex-wrap:wrap
+}
+.badge{
+  font-size:11px;font-weight:750;color:#b9c9c1;padding:7px 10px;border-radius:999px;
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.075)
+}
+.panel{
+  background:linear-gradient(180deg,rgba(11,34,25,.94),rgba(6,24,17,.96));
+  border:1px solid rgba(46,224,148,.22);border-radius:25px;padding:18px;
+  box-shadow:0 28px 80px rgba(0,0,0,.36)
+}
+.label{color:#86a99a;text-transform:uppercase;font-weight:850;font-size:10px;letter-spacing:1.8px;margin:3px 2px 11px}
+.primary,.secondary{
+  display:flex;align-items:center;justify-content:center;gap:10px;width:100%;
+  min-height:58px;padding:15px 18px;border-radius:15px;text-decoration:none;
+  font-size:15px;font-weight:900;letter-spacing:.15px;transition:.18s ease
+}
+.primary{background:linear-gradient(135deg,#20e39a,#16c579);color:#03100b;box-shadow:0 13px 34px rgba(24,207,127,.18)}
+.primary:hover{transform:translateY(-1px);filter:brightness(1.05)}
+.secondary{margin-top:11px;background:#f6faf8;color:#07150f}
+.secondary:hover{transform:translateY(-1px)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:15px}
+.tile{
+  min-height:86px;padding:14px;border-radius:15px;text-decoration:none;color:#fff;
+  background:rgba(255,255,255,.043);border:1px solid rgba(255,255,255,.075);
+  display:flex;flex-direction:column;justify-content:center;transition:.18s ease
+}
+.tile:hover{background:rgba(36,219,139,.08);border-color:rgba(36,219,139,.25);transform:translateY(-1px)}
+.icon{font-size:22px;margin-bottom:8px}.tile b{font-size:13px}.tile span{font-size:10px;color:#849c91;margin-top:4px}
+.info{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.info div{text-align:center;padding:10px 6px;border-radius:12px;background:rgba(0,0,0,.14);border:1px solid rgba(255,255,255,.045)}
+.info strong{display:block;font-size:11px}.info small{display:block;color:#789185;font-size:9px;margin-top:4px}
+.footer{text-align:center;padding:22px 12px 0;color:#71867c;font-size:10px;line-height:1.6}
+.footer b{color:#a4b7ae}
+@media(max-width:480px){
+  .page{padding:15px 13px 26px}.hero{padding:22px 4px 17px}.panel{padding:14px;border-radius:21px}
+  .primary,.secondary{min-height:55px}.grid{gap:8px}.tile{min-height:82px}.info{gap:6px}
+}
 </style>
 </head>
 <body>
-<div class="card">
-<div class="logo">BETROXY</div>
-<div class="tag">Play Beyond Limits</div>
-<a class="btn tg" href="{{TELEGRAM_URL}}">OPEN BETROXY BOT</a>
-<a class="btn web" href="{{WEBSITE_URL}}">VISIT BETROXY.COM</a>
-<div class="small">18+ • Play Responsibly</div>
-</div>
-</body></html>"""
+<main class="page">
+  <div class="source"><span class="dot"></span> Exclusive access from {{INSTAGRAM_PAGE}}</div>
+
+  <section class="hero">
+    <div class="logo">BETR<span class="o">O</span>XY</div>
+    <div class="kicker">Casino • Sportsbook • Exchange</div>
+    <h1>Your game. Your way.</h1>
+    <p>Choose how you want to continue through Betroxy official access.</p>
+    <div class="trust">
+      <span class="badge">⚡ Fast Access</span>
+      <span class="badge">✓ Official Access</span>
+      <span class="badge">💬 Support</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="label">Official Access</div>
+
+    <a class="primary" href="{{WEBSITE_URL}}" data-betroxy="website">🚀 PLAY ON WEBSITE</a>
+    <a class="secondary" href="{{TELEGRAM_URL}}" data-betroxy="telegram">✈ OPEN TELEGRAM BOT</a>
+
+    <div class="grid">
+      <a class="tile" href="/go/{{LANDING_SLUG}}/casino">
+        <span class="icon">🎰</span><b>Casino</b><span>Open casino lobby</span>
+      </a>
+      <a class="tile" href="/go/{{LANDING_SLUG}}/sportsbook">
+        <span class="icon">⚽</span><b>Sportsbook</b><span>Sports markets</span>
+      </a>
+      <a class="tile" href="/go/{{LANDING_SLUG}}/popular">
+        <span class="icon">🔥</span><b>Popular Games</b><span>Trending games</span>
+      </a>
+      <a class="tile" href="/go/{{LANDING_SLUG}}/promotions">
+        <span class="icon">🎁</span><b>Promotions</b><span>Latest offers</span>
+      </a>
+    </div>
+
+    <div class="info">
+      <div><strong>Official</strong><small>Verified links</small></div>
+      <div><strong>Mobile Ready</strong><small>Fast access</small></div>
+      <div><strong>18+</strong><small>Play responsibly</small></div>
+    </div>
+  </section>
+
+  <div class="footer">
+    <b>BETROXY</b><br>
+    18+ • Play Responsibly • Terms and eligibility apply.
+  </div>
+</main>
+</body>
+</html>"""
 
 
 def sample_creator_for_preview():
@@ -1894,7 +2000,20 @@ def outbound_redirect(slug, destination):
     record_outbound_click(slug, destination)
 
     if destination == "telegram":
-        return redirect(BETROXY_BOT_URL, code=302)
+        # Preserve the creator/affiliate code when opening the affiliate bot.
+        return redirect(
+            f"https://t.me/{BOT_USERNAME}?start=agent_{link['agent_code']}",
+            code=302,
+        )
+
+    if destination == "casino":
+        return redirect("https://t.me/BetroxyBot/casino", code=302)
+
+    if destination == "sportsbook":
+        return redirect("https://t.me/BetroxyBot/sportsbook", code=302)
+
+    if destination == "popular":
+        return redirect("https://t.me/BetroxyBot/populargames", code=302)
 
     params = {
         "utm_source": "instagram",
@@ -1902,8 +2021,14 @@ def outbound_redirect(slug, destination):
         "utm_campaign": "batraxy",
         "utm_content": slug,
     }
-    separator = "&" if "?" in BETROXY_WEB_URL else "?"
-    return redirect(BETROXY_WEB_URL + separator + urlencode(params), code=302)
+
+    if destination == "promotions":
+        target = "https://betroxy.com/promotions"
+    else:
+        target = BETROXY_WEB_URL
+
+    separator = "&" if "?" in target else "?"
+    return redirect(target + separator + urlencode(params), code=302)
 
 
 @tracker_api.get("/<slug>")
