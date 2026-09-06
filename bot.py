@@ -397,6 +397,27 @@ def init_db():
 
             cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS verifier_control (
+                    id INTEGER PRIMARY KEY,
+                    run_token TEXT,
+                    requested_at TIMESTAMPTZ,
+                    claimed_at TIMESTAMPTZ,
+                    completed_at TIMESTAMPTZ,
+                    status TEXT DEFAULT 'idle',
+                    result_summary TEXT
+                )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO verifier_control (id, status)
+                VALUES (1, 'idle')
+                ON CONFLICT (id) DO NOTHING
+                """
+            )
+
+            cur.execute(
+                """
                 INSERT INTO campaign_links (instagram_username, slug, agent_code)
                 VALUES
                 ('fakt_cricket_memes','fakt-cricket-memes','faktcricket'),
@@ -979,8 +1000,12 @@ def campaign_menu():
                 InlineKeyboardButton("📥 Export CSV", callback_data="campaign_export"),
             ],
             [
-                InlineKeyboardButton("✅ Verification Center", callback_data="verify_home"),
+                InlineKeyboardButton("🔄 Run Bio Check Now", callback_data="verify_request_local_run"),
                 InlineKeyboardButton("📊 Auto Report", callback_data="verify_auto_report:1"),
+            ],
+            [
+                InlineKeyboardButton("✅ Verification Center", callback_data="verify_home"),
+                InlineKeyboardButton("💻 Checker Status", callback_data="verify_local_status"),
             ],
             [
                 InlineKeyboardButton("📄 Download PDF", callback_data="campaign_pdf"),
@@ -2400,6 +2425,37 @@ def resolve_or_create_final_promoted_links(raw_text):
     return refreshed, unresolved
 
 
+
+def request_local_verifier_run():
+    token = secrets.token_hex(16)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE verifier_control
+                SET run_token=%s,
+                    requested_at=NOW(),
+                    claimed_at=NULL,
+                    completed_at=NULL,
+                    status='requested',
+                    result_summary=NULL
+                WHERE id=1
+                RETURNING *
+                """,
+                (token,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return row
+
+
+def get_local_verifier_control():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM verifier_control WHERE id=1")
+            return cur.fetchone()
+
+
 def set_campaign_link_active(code, active):
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -3748,6 +3804,74 @@ def verifier_result():
     return jsonify({"ok": True})
 
 
+
+@tracker_api.get("/api/verifier/command")
+def verifier_command():
+    if not _verifier_authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM verifier_control
+                WHERE id=1
+                FOR UPDATE
+                """
+            )
+            row = cur.fetchone()
+
+            if not row or row.get("status") != "requested" or not row.get("run_token"):
+                conn.commit()
+                return jsonify({"ok": True, "command": None})
+
+            token = row["run_token"]
+            cur.execute(
+                """
+                UPDATE verifier_control
+                SET status='running', claimed_at=NOW()
+                WHERE id=1 AND run_token=%s
+                """,
+                (token,),
+            )
+        conn.commit()
+
+    return jsonify({"ok": True, "command": "run", "run_token": token})
+
+
+@tracker_api.post("/api/verifier/complete")
+def verifier_complete():
+    if not _verifier_authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    token = str(payload.get("run_token") or "")
+    summary = str(payload.get("summary") or "")[:4000]
+    if not token:
+        return jsonify({"ok": False, "error": "run_token required"}), 400
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE verifier_control
+                SET status='completed',
+                    completed_at=NOW(),
+                    result_summary=%s
+                WHERE id=1 AND run_token=%s
+                RETURNING id
+                """,
+                (summary, token),
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if not row:
+        return jsonify({"ok": False, "error": "run token not found"}), 404
+    return jsonify({"ok": True})
+
+
 @tracker_api.get("/api/verifier/status")
 def verifier_status():
     if not _verifier_authorized():
@@ -4921,6 +5045,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+
+    if data == "verify_request_local_run":
+        control = request_local_verifier_run()
+        await q.message.reply_text(
+            "🔄 <b>Bio check requested.</b>\n\n"
+            "The request has been queued for your local/VPS checker.\n"
+            "As soon as <code>RUN_REMOTE_LISTENER.bat</code> is running, it will start the check automatically.\n\n"
+            "After it finishes, open <b>📊 Auto Report</b> for the latest results.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
+        return
 
     if data == "verify_local_status":
         with get_db() as conn:
