@@ -1566,10 +1566,10 @@ def instagram_tracker_stats(code=None, period="all"):
     period_filter = _period_sql(period)
     with get_db() as conn:
         with conn.cursor() as cur:
-            where = ""
+            where = "WHERE 1=1"
             params = []
             if code:
-                where = "WHERE LOWER(a.code)=LOWER(%s)"
+                where = "WHERE LOWER(cl.agent_code)=LOWER(%s)"
                 params = [code]
 
             cur.execute(
@@ -1615,8 +1615,9 @@ def instagram_tracker_stats(code=None, period="all"):
                     GROUP BY agent_code
                 )
                 SELECT
-                    a.code,
-                    a.name,
+                    cl.agent_code AS code,
+                    cl.instagram_username AS name,
+                    cl.slug,
                     COALESCE(v.landing_visits, 0) AS landing_visits,
                     COALESCE(v.unique_visitors, 0) AS unique_visitors,
                     COALESCE(o.telegram_clicks, 0) AS telegram_clicks,
@@ -1625,13 +1626,15 @@ def instagram_tracker_stats(code=None, period="all"):
                     COALESCE(c.registrations, 0) AS registrations,
                     COALESCE(c.deposits, 0) AS deposits,
                     COALESCE(c.deposit_amount, 0) AS deposit_amount
-                FROM agents a
-                LEFT JOIN visits v ON LOWER(v.agent_code)=LOWER(a.code)
-                LEFT JOIN outbound o ON LOWER(o.agent_code)=LOWER(a.code)
-                LEFT JOIN starts s ON LOWER(s.agent_code)=LOWER(a.code)
-                LEFT JOIN conv c ON LOWER(c.agent_code)=LOWER(a.code)
+                FROM campaign_links cl
+                LEFT JOIN agents a ON LOWER(a.code)=LOWER(cl.agent_code)
+                LEFT JOIN visits v ON LOWER(v.agent_code)=LOWER(cl.agent_code)
+                LEFT JOIN outbound o ON LOWER(o.agent_code)=LOWER(cl.agent_code)
+                LEFT JOIN starts s ON LOWER(s.agent_code)=LOWER(cl.agent_code)
+                LEFT JOIN conv c ON LOWER(c.agent_code)=LOWER(cl.agent_code)
                 {where}
-                ORDER BY landing_visits DESC, telegram_clicks DESC, website_clicks DESC, a.name
+                AND cl.is_active=TRUE
+                ORDER BY landing_visits DESC, telegram_clicks DESC, website_clicks DESC, cl.instagram_username
                 """,
                 params,
             )
@@ -2930,10 +2933,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "campaign_report":
         rows = instagram_tracker_stats()
         lines = ["📊 <b>Full Campaign Report</b>", ""]
-        for r in rows[:25]:
-            lines.append(f"@{r['name']}: <b>{int(r['landing_visits'] or 0)}</b> visits • {int(r['telegram_clicks'] or 0)} bot • {int(r['website_clicks'] or 0)} web • {int(r['deposits'] or 0)} dep")
-        if len(rows) > 25:
-            lines.append("\nUse Creator Links for all pages.")
+        for r in rows:
+            lines.append(
+                f"• <b>@{html.escape(str(r['name']))}</b> — "
+                f"{int(r['landing_visits'] or 0)} visits | "
+                f"{int(r['telegram_clicks'] or 0)} bot | "
+                f"{int(r['website_clicks'] or 0)} web | "
+                f"{int(r['deposits'] or 0)} dep"
+            )
         await q.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=campaign_menu())
         return
 
@@ -2957,7 +2964,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = instagram_tracker_stats()
         lines = ["🏆 <b>Top Performing Pages</b>", ""]
         for i, r in enumerate(rows[:10], 1):
-            lines.append(f"{i}. @{r['name']} — <b>{int(r['landing_visits'] or 0)}</b> visits • {int(r['telegram_clicks'] or 0)} bot • {int(r['website_clicks'] or 0)} web")
+            lines.append(
+                f"{i}. <b>@{html.escape(str(r['name']))}</b> — "
+                f"{int(r['landing_visits'] or 0)} visits | "
+                f"{int(r['telegram_clicks'] or 0)} bot | "
+                f"{int(r['website_clicks'] or 0)} web"
+            )
         await q.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=campaign_menu())
         return
 
