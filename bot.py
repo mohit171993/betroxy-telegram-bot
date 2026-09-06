@@ -8,7 +8,9 @@ import hashlib
 import zipfile
 import mimetypes
 import html
-from urllib.parse import urlencode
+import json
+import time
+from urllib.parse import urlencode, urlparse
 from datetime import datetime, timezone
 from threading import Thread
 
@@ -20,6 +22,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
+import requests
 import psycopg
 from psycopg.rows import dict_row
 
@@ -54,6 +57,10 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://www.batraxy.com").rstrip
 BETROXY_BOT_URL = os.getenv("BETROXY_BOT_URL", "https://t.me/BetroxyBot")
 BETROXY_WEB_URL = os.getenv("BETROXY_WEB_URL", "https://betroxy.com/")
 THEME_UPLOAD_MAX_MB = int(os.getenv("THEME_UPLOAD_MAX_MB", "20"))
+IG_SESSIONID = os.getenv("IG_SESSIONID", "").strip()
+IG_CHECK_INTERVAL_SECONDS = int(os.getenv("IG_CHECK_INTERVAL_SECONDS", "3600"))
+IG_CHECK_TIMEOUT = int(os.getenv("IG_CHECK_TIMEOUT", "18"))
+IG_WEB_APP_ID = os.getenv("IG_WEB_APP_ID", "936619743392459").strip()
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
@@ -307,6 +314,43 @@ def init_db():
                 )
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE campaign_verification
+                ADD COLUMN IF NOT EXISTS auto_checked_at TIMESTAMPTZ
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE campaign_verification
+                ADD COLUMN IF NOT EXISTS auto_check_status TEXT DEFAULT 'pending'
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE campaign_verification
+                ADD COLUMN IF NOT EXISTS auto_check_detail TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE campaign_verification
+                ADD COLUMN IF NOT EXISTS detected_bio_links TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE campaign_verification
+                ADD COLUMN IF NOT EXISTS detected_story_count INTEGER DEFAULT 0
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE campaign_verification
+                ADD COLUMN IF NOT EXISTS checker_mode TEXT
+                """
+            )
+
             cur.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_campaign_verification_link_day
@@ -1033,6 +1077,391 @@ def save_verification_proof(campaign_link_id, day, file_id, proof_type, caption,
             return row
 
 
+
+def _normalized_url_for_compare(value):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if not re.match(r"^https?://", value, flags=re.I):
+        value = "https://" + value
+    try:
+        p = urlparse(value)
+        host = (p.netloc or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        path = re.sub(r"/+$", "", p.path or "")
+        return f"{host}{path}".lower()
+    except Exception:
+        return value.lower().rstrip("/")
+
+
+def _collect_instagram_bio_links(user_obj):
+    links = []
+
+    def add(v):
+        if isinstance(v, str) and v.strip():
+            links.append(v.strip())
+
+    add(user_obj.get("external_url"))
+    add(user_obj.get("external_url_linkshimmed"))
+
+    for key in ("bio_links", "bio_links_with_metadata"):
+        val = user_obj.get(key)
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
+                    for k in ("url", "lynx_url", "link_url", "external_url"):
+                        add(item.get(k))
+                elif isinstance(item, str):
+                    add(item)
+
+    biography = user_obj.get("biography") or ""
+    for found in re.findall(r"https?://[^\s<>\"]+", biography):
+        add(found)
+
+    # De-duplicate by normalized destination.
+    out = []
+    seen = set()
+    for link in links:
+        normalized = _normalized_url_for_compare(link)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            out.append(link)
+    return out
+
+
+def _ig_headers():
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0 Safari/537.36"
+        ),
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "X-IG-App-ID": IG_WEB_APP_ID,
+        "Referer": "https://www.instagram.com/",
+    }
+
+
+def _ig_cookies():
+    return {"sessionid": IG_SESSIONID} if IG_SESSIONID else {}
+
+
+def fetch_instagram_profile_free(username):
+    """
+    Best-effort, zero-paid-API profile check using Instagram's web endpoint.
+    It is intentionally conservative: any block/rate-limit becomes UNKNOWN,
+    not a false 'missing'.
+    """
+    username = str(username).strip().lstrip("@")
+    urls = [
+        f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}",
+        f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}",
+    ]
+    last_error = None
+    for url in urls:
+        try:
+            r = requests.get(
+                url,
+                headers=_ig_headers(),
+                cookies=_ig_cookies(),
+                timeout=IG_CHECK_TIMEOUT,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                user = (data.get("data") or {}).get("user")
+                if user:
+                    return {"ok": True, "user": user, "status_code": 200}
+            last_error = f"HTTP {r.status_code}"
+        except Exception as exc:
+            last_error = str(exc)
+    return {"ok": False, "error": last_error or "Instagram profile check unavailable"}
+
+
+def _extract_user_id(user_obj):
+    for key in ("id", "pk", "fbid"):
+        val = user_obj.get(key)
+        if val:
+            return str(val)
+    return None
+
+
+def fetch_instagram_stories_free(user_id):
+    """
+    Stories generally require an authenticated Instagram web session.
+    If IG_SESSIONID is absent, return 'unknown' rather than false missing.
+    """
+    if not IG_SESSIONID:
+        return {
+            "ok": False,
+            "needs_session": True,
+            "error": "IG_SESSIONID not configured; automatic Story inspection unavailable",
+        }
+    if not user_id:
+        return {"ok": False, "error": "Could not resolve Instagram user id"}
+
+    endpoints = [
+        f"https://www.instagram.com/api/v1/feed/reels_media/?reel_ids={user_id}",
+        f"https://i.instagram.com/api/v1/feed/reels_media/?reel_ids={user_id}",
+    ]
+    last_error = None
+    for url in endpoints:
+        try:
+            r = requests.get(
+                url,
+                headers=_ig_headers(),
+                cookies=_ig_cookies(),
+                timeout=IG_CHECK_TIMEOUT,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                reels = data.get("reels") or {}
+                reel = reels.get(str(user_id)) or reels.get(int(user_id)) if str(user_id).isdigit() else None
+                if not reel and isinstance(reels, dict) and reels:
+                    reel = next(iter(reels.values()))
+                items = (reel or {}).get("items") or []
+                return {"ok": True, "items": items, "raw": data}
+            last_error = f"HTTP {r.status_code}"
+        except Exception as exc:
+            last_error = str(exc)
+    return {"ok": False, "error": last_error or "Story check unavailable"}
+
+
+def _story_contains_assigned_link(item, assigned_url):
+    target = _normalized_url_for_compare(assigned_url)
+    if not target:
+        return False
+    try:
+        blob = json.dumps(item, ensure_ascii=False).lower()
+    except Exception:
+        blob = str(item).lower()
+
+    # Check exact normalized target and domain/path variants.
+    candidates = {
+        target,
+        target.replace("https://", "").replace("http://", ""),
+        "batraxy.com/" + assigned_url.rstrip("/").split("/")[-1].lower(),
+    }
+    return any(c and c in blob for c in candidates)
+
+
+def current_campaign_day(row):
+    created = row.get("created_at")
+    if not created:
+        return 1
+    try:
+        today = datetime.now(timezone.utc).date()
+        created_day = created.date()
+        return max(1, min(7, (today - created_day).days + 1))
+    except Exception:
+        return 1
+
+
+def save_auto_verification_result(
+    campaign_link_id,
+    day,
+    bio_status=None,
+    only_status=None,
+    story_status=None,
+    story_link_status=None,
+    auto_status="checked",
+    detail="",
+    bio_links=None,
+    story_count=0,
+    checker_mode="free_web",
+):
+    get_verification_row(campaign_link_id, day)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            fields = [
+                "auto_checked_at=NOW()",
+                "auto_check_status=%s",
+                "auto_check_detail=%s",
+                "detected_bio_links=%s",
+                "detected_story_count=%s",
+                "checker_mode=%s",
+                "checked_at=NOW()",
+            ]
+            params = [
+                auto_status,
+                detail,
+                json.dumps(bio_links or [], ensure_ascii=False),
+                int(story_count or 0),
+                checker_mode,
+            ]
+
+            # Only overwrite compliance fields when we actually obtained a
+            # trustworthy result for that part of the check.
+            if bio_status is not None:
+                fields.append("bio_status=%s")
+                params.append(bio_status)
+            if only_status is not None:
+                fields.append("only_our_link_status=%s")
+                params.append(only_status)
+            if story_status is not None:
+                fields.append("story_status=%s")
+                params.append(story_status)
+            if story_link_status is not None:
+                fields.append("story_link_status=%s")
+                params.append(story_link_status)
+
+            params.extend([campaign_link_id, day])
+            cur.execute(
+                f"""
+                UPDATE campaign_verification
+                SET {", ".join(fields)}
+                WHERE campaign_link_id=%s AND campaign_day=%s
+                """,
+                params,
+            )
+        conn.commit()
+
+
+def run_free_instagram_check_for_link(row):
+    source = (row.get("source_type") or "instagram").lower()
+    if source != "instagram":
+        return {
+            "ok": False,
+            "skipped": True,
+            "detail": f"Free Instagram checker skipped source={source}",
+        }
+
+    username = str(row["instagram_username"]).strip().lstrip("@")
+    assigned_url = f"{PUBLIC_BASE_URL}/{row['slug']}"
+    day = current_campaign_day(row)
+    profile = fetch_instagram_profile_free(username)
+
+    if not profile.get("ok"):
+        save_auto_verification_result(
+            row["id"], day,
+            auto_status="unknown",
+            detail=f"Profile check unavailable: {profile.get('error')}",
+            checker_mode="free_web",
+        )
+        return {"ok": False, "detail": profile.get("error"), "day": day}
+
+    user = profile["user"]
+    bio_links = _collect_instagram_bio_links(user)
+    normalized_target = _normalized_url_for_compare(assigned_url)
+    normalized_links = [_normalized_url_for_compare(x) for x in bio_links]
+
+    bio_ok = normalized_target in normalized_links
+    bio_status = "verified" if bio_ok else "missing"
+
+    # "Only our link" means the assigned campaign URL is present and no other
+    # distinct external destinations were detected.
+    distinct_links = {x for x in normalized_links if x}
+    only_status = (
+        "verified"
+        if bio_ok and distinct_links == {normalized_target}
+        else "issue"
+    )
+
+    user_id = _extract_user_id(user)
+    stories = fetch_instagram_stories_free(user_id)
+
+    if stories.get("ok"):
+        items = stories.get("items") or []
+        story_count = len(items)
+        story_status = "verified" if story_count > 0 else "missing"
+        story_has_link = any(
+            _story_contains_assigned_link(item, assigned_url)
+            for item in items
+        )
+        story_link_status = (
+            "verified" if story_has_link
+            else ("issue" if story_count > 0 else "pending")
+        )
+        story_detail = (
+            f"Stories checked={story_count}; assigned link "
+            f"{'found' if story_has_link else 'not found'}"
+        )
+    else:
+        story_count = 0
+        story_status = None
+        story_link_status = None
+        story_detail = stories.get("error") or "Story inspection unavailable"
+
+    detail = (
+        f"Bio {'OK' if bio_ok else 'MISSING'}; "
+        f"detected bio links={len(distinct_links)}; {story_detail}"
+    )
+
+    save_auto_verification_result(
+        row["id"],
+        day,
+        bio_status=bio_status,
+        only_status=only_status,
+        story_status=story_status,
+        story_link_status=story_link_status,
+        auto_status="checked",
+        detail=detail,
+        bio_links=bio_links,
+        story_count=story_count,
+        checker_mode="free_web+session" if IG_SESSIONID else "free_web",
+    )
+    return {
+        "ok": True,
+        "day": day,
+        "bio_status": bio_status,
+        "only_status": only_status,
+        "story_status": story_status,
+        "story_link_status": story_link_status,
+        "story_count": story_count,
+        "detail": detail,
+    }
+
+
+def run_free_hourly_verification_once():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM campaign_links
+                WHERE is_active=TRUE
+                  AND LOWER(COALESCE(source_type,'instagram'))='instagram'
+                ORDER BY id
+                """
+            )
+            rows = cur.fetchall()
+
+    checked = 0
+    failed = 0
+    for row in rows:
+        try:
+            result = run_free_instagram_check_for_link(row)
+            checked += 1
+            if not result.get("ok"):
+                failed += 1
+        except Exception as exc:
+            failed += 1
+            logger.exception(
+                "Free hourly verification failed for %s",
+                row.get("instagram_username"),
+            )
+        # Gentle spacing avoids hammering Instagram.
+        time.sleep(1.25)
+
+    logger.info(
+        "Free Instagram verification cycle complete: checked=%s failed=%s",
+        checked, failed,
+    )
+    return {"checked": checked, "failed": failed}
+
+
+def free_hourly_verification_worker():
+    # Give the bot/web server time to start before first cycle.
+    time.sleep(20)
+    while True:
+        try:
+            run_free_hourly_verification_once()
+        except Exception:
+            logger.exception("Hourly free Instagram verification cycle failed")
+        time.sleep(max(3600, IG_CHECK_INTERVAL_SECONDS))
+
+
 def verification_summary_rows(day=1):
     day = max(1, min(int(day), 7))
     with get_db() as conn:
@@ -1053,7 +1482,14 @@ def verification_summary_rows(day=1):
                     v.proof_file_id,
                     v.proof_type,
                     v.proof_caption,
-                    v.checked_at
+                    v.checked_at,
+                    v.auto_checked_at,
+                    COALESCE(v.auto_check_status,'pending') AS auto_check_status,
+                    v.auto_check_detail,
+                    v.detected_bio_links,
+                    COALESCE(v.detected_story_count,0) AS detected_story_count,
+                    v.checker_mode,
+                    cl.created_at
                 FROM campaign_links cl
                 LEFT JOIN campaign_verification v
                     ON v.campaign_link_id=cl.id
@@ -1149,6 +1585,10 @@ def verification_list_keyboard(rows, day=1, page=0, per_page=8):
         buttons.append(day_buttons)
 
     buttons.append([
+        InlineKeyboardButton("🤖 Run Free Check Now", callback_data=f"verify_auto_run:{day}"),
+        InlineKeyboardButton("📊 Auto Report", callback_data=f"verify_auto_report:{day}"),
+    ])
+    buttons.append([
         InlineKeyboardButton("📄 Compliance PDF", callback_data=f"verify_pdf:{day}"),
         InlineKeyboardButton("⬅️ Campaign Tracker", callback_data="campaign_home"),
     ])
@@ -1163,6 +1603,20 @@ def verification_creator_text(row, day):
     checked = row.get("checked_at")
     checked_text = checked.strftime("%d %b %Y %H:%M UTC") if checked else "Not checked"
 
+    auto_checked = row.get("auto_checked_at")
+    auto_checked_text = (
+        auto_checked.strftime("%d %b %Y %H:%M UTC")
+        if auto_checked else "Not run yet"
+    )
+    auto_status = str(row.get("auto_check_status") or "pending")
+    auto_icon = {
+        "checked": "🤖✅",
+        "unknown": "🤖⚠️",
+        "pending": "🤖⏳",
+    }.get(auto_status, "🤖⏳")
+    mode = row.get("checker_mode") or "—"
+    detail = html.escape(str(row.get("auto_check_detail") or "No automatic result yet"))
+
     return (
         f"✅ <b>Campaign Verification</b> — Day {day}/7\n\n"
         f"Creator: <b>@{html.escape(str(row['instagram_username']))}</b>\n"
@@ -1172,8 +1626,55 @@ def verification_creator_text(row, day):
         f"Only Our Link: <b>{only} {html.escape(str(row['only_our_link_status']).title())}</b>\n"
         f"Story Live: <b>{story} {html.escape(str(row['story_status']).title())}</b>\n"
         f"Story Link: <b>{story_link} {html.escape(str(row['story_link_status']).title())}</b>\n"
-        f"Proof: <b>{'✅ Available' if row.get('proof_file_id') else '⏳ Not uploaded'}</b>\n"
-        f"Last checked: <b>{checked_text}</b>"
+        f"Proof: <b>{'✅ Available' if row.get('proof_file_id') else '⏳ Not uploaded'}</b>\n\n"
+        f"{auto_icon} <b>Automatic checker</b>\n"
+        f"Mode: <code>{html.escape(str(mode))}</code>\n"
+        f"Last auto check: <b>{auto_checked_text}</b>\n"
+        f"Result: {detail}\n\n"
+        f"Last status update: <b>{checked_text}</b>"
+    )
+
+
+
+def automatic_verification_report_text(rows, day):
+    total = len(rows)
+    compliant = issues = pending = 0
+    table = [
+        f"{'Creator':<16} {'Bio':<4} {'Only':<4} {'Story':<5} {'Link':<4}",
+        "-" * 39,
+    ]
+    for r in rows:
+        b = VERIFY_STATUS_LABEL.get(r["bio_status"], "⏳")
+        o = VERIFY_STATUS_LABEL.get(r["only_our_link_status"], "⏳")
+        s = VERIFY_STATUS_LABEL.get(r["story_status"], "⏳")
+        l = VERIFY_STATUS_LABEL.get(r["story_link_status"], "⏳")
+
+        vals = [
+            r["bio_status"],
+            r["only_our_link_status"],
+            r["story_status"],
+            r["story_link_status"],
+        ]
+        if all(v == "verified" for v in vals):
+            compliant += 1
+        elif any(v in {"missing", "issue"} for v in vals):
+            issues += 1
+        else:
+            pending += 1
+
+        creator = ("@" + str(r["instagram_username"]))[:16]
+        table.append(f"{creator:<16} {b:<4} {o:<4} {s:<5} {l:<4}")
+
+    return (
+        f"🤖 <b>Automatic Compliance Report — Day {day}/7</b>\n\n"
+        "<pre>" + html.escape("\n".join(table)) + "</pre>\n"
+        f"<b>Total:</b> {total} | "
+        f"<b>Compliant:</b> {compliant} | "
+        f"<b>Issues:</b> {issues} | "
+        f"<b>Pending/Unknown:</b> {pending}\n\n"
+        f"Hourly checker: <b>ON</b>\n"
+        f"Bio checker: <b>Free Instagram web check</b>\n"
+        f"Story checker: <b>{'Enabled with IG_SESSIONID' if IG_SESSIONID else 'Needs IG_SESSIONID for automatic Story inspection'}</b>"
     )
 
 
@@ -4075,6 +4576,35 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+
+    if data.startswith("verify_auto_run:"):
+        day = int(data.split(":", 1)[1])
+        await q.message.reply_text(
+            "🤖 <b>Free verification started.</b>\n\n"
+            "Checking active Instagram creators now. "
+            "Instagram blocks/rate-limits are recorded as Unknown, not Missing.",
+            parse_mode=ParseMode.HTML,
+        )
+        result = run_free_hourly_verification_once()
+        rows = verification_summary_rows(day)
+        await q.message.reply_text(
+            f"✅ Check finished: {result['checked']} checked, {result['failed']} unavailable.\n\n"
+            + automatic_verification_report_text(rows, day),
+            parse_mode=ParseMode.HTML,
+            reply_markup=verification_list_keyboard(rows, day=day),
+        )
+        return
+
+    if data.startswith("verify_auto_report:"):
+        day = int(data.split(":", 1)[1])
+        rows = verification_summary_rows(day)
+        await q.message.reply_text(
+            automatic_verification_report_text(rows, day),
+            parse_mode=ParseMode.HTML,
+            reply_markup=verification_list_keyboard(rows, day=day),
+        )
+        return
+
     if data == "verify_home":
         rows = verification_summary_rows(1)
         await q.message.reply_text(
@@ -5339,6 +5869,7 @@ def main():
     app.add_error_handler(error_handler)
 
     Thread(target=run_tracker_api, daemon=True).start()
+    Thread(target=free_hourly_verification_worker, daemon=True).start()
     logger.info("Betroxy Official Bot + Instagram tracker starting...")
     app.run_polling(drop_pending_updates=True)
 
