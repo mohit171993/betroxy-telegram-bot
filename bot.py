@@ -898,6 +898,41 @@ def campaign_menu():
     )
 
 
+def campaign_report_creator_keyboard(rows):
+    """
+    Keep the report itself as a fixed-width table, while making every creator
+    directly clickable via Telegram URL buttons attached to the same report.
+    Clicking @creator opens the creator's Instagram page.
+    """
+    buttons = []
+    current = []
+
+    for r in rows:
+        username = str(r["name"]).strip().lstrip("@")
+        current.append(
+            InlineKeyboardButton(
+                f"📸 @{username}",
+                url=f"https://www.instagram.com/{username}/",
+            )
+        )
+        if len(current) == 2:
+            buttons.append(current)
+            current = []
+
+    if current:
+        buttons.append(current)
+
+    buttons.append([
+        InlineKeyboardButton("📊 Full Report", callback_data="campaign_report"),
+        InlineKeyboardButton("🏆 Top Pages", callback_data="campaign_top"),
+    ])
+    buttons.append([
+        InlineKeyboardButton("📅 Today", callback_data="campaign_today"),
+        InlineKeyboardButton("⬅️ Campaign Tracker", callback_data="campaign_home"),
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
 def campaign_creator_menu(code):
     row = campaign_link_by_code(code)
     landing_url = f"{PUBLIC_BASE_URL}/{row['slug']}" if row else PUBLIC_BASE_URL
@@ -2647,7 +2682,7 @@ def campaign_links_keyboard(page=0, per_page=8):
     rows = []
 
     for item in subset:
-        landing_url = f"{PUBLIC_BASE_URL}/{item['slug']}"
+        username = str(item["instagram_username"]).strip().lstrip("@")
         source = (item.get("source_type") or "instagram").lower()
         source_icon = {
             "instagram": "📸",
@@ -2658,8 +2693,8 @@ def campaign_links_keyboard(page=0, per_page=8):
 
         rows.append([
             InlineKeyboardButton(
-                f"{source_icon} @{item['instagram_username']}",
-                url=landing_url,
+                f"{source_icon} @{username}",
+                url=f"https://www.instagram.com/{username}/",
             ),
             InlineKeyboardButton(
                 "⚙️ Manage",
@@ -3286,18 +3321,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        lines = [
-            "📊 <b>Full Campaign Report</b>",
-            "",
-            "<b>Creator</b> | <b>Src</b> | <b>Vis</b> | <b>Bot</b> | <b>Web</b> | <b>Dep</b>",
-            "────────────────────────",
+        table = [
+            f"{'Creator':<16} {'Src':<7} {'Vis':>4} {'Bot':>4} {'Web':>4} {'Dep':>4}",
+            "-" * 44,
         ]
 
         total_vis = total_bot = total_web = total_dep = 0
 
         for r in rows:
-            name = html.escape("@" + str(r["name"]))
-            landing_url = html.escape(f"{PUBLIC_BASE_URL}/{r['slug']}", quote=True)
+            creator = ("@" + str(r["name"]))[:16]
             src = {
                 "instagram": "Insta",
                 "telegram": "TG",
@@ -3315,27 +3347,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total_web += web_clicks
             total_dep += dep
 
-            lines.append(
-                f'🌐 <a href="{landing_url}"><b>{name}</b></a> | '
-                f'<code>{src}</code> | '
-                f'<code>{vis}</code> | '
-                f'<code>{bot_clicks}</code> | '
-                f'<code>{web_clicks}</code> | '
-                f'<code>{dep}</code>'
+            table.append(
+                f"{creator:<16} {src:<7} "
+                f"{vis:>4} {bot_clicks:>4} {web_clicks:>4} {dep:>4}"
             )
 
-        lines.extend([
-            "────────────────────────",
-            f"<b>TOTAL</b> | Vis <b>{total_vis}</b> | Bot <b>{total_bot}</b> | "
-            f"Web <b>{total_web}</b> | Dep <b>{total_dep}</b>",
-            "",
-            "Tap any creator name to open that creator's landing page.",
+        table.extend([
+            "-" * 44,
+            f"{'TOTAL':<16} {'':<7} "
+            f"{total_vis:>4} {total_bot:>4} {total_web:>4} {total_dep:>4}",
         ])
 
+        text = (
+            "📊 <b>Full Campaign Report</b>\n\n"
+            "<pre>" + html.escape("\n".join(table)) + "</pre>"
+            "\n📸 Tap a creator button below to open that Instagram page."
+        )
+
         await q.message.reply_text(
-            "\n".join(lines),
+            text,
             parse_mode=ParseMode.HTML,
-            reply_markup=campaign_menu(),
+            reply_markup=campaign_report_creator_keyboard(rows),
             disable_web_page_preview=True,
         )
         return
@@ -3372,36 +3404,34 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        lines = [
-            "🏆 <b>Top Performing Pages</b>",
-            "",
-            "<b># Creator</b> | <b>Vis</b> | <b>Bot</b> | <b>Web</b>",
-            "────────────────────────",
+        top_rows = rows[:10]
+        table = [
+            f"{'#':<2} {'Creator':<18} {'Vis':>4} {'Bot':>4} {'Web':>4}",
+            "-" * 39,
         ]
 
-        for i, r in enumerate(rows[:10], 1):
-            name = html.escape("@" + str(r["name"]))
-            landing_url = html.escape(f"{PUBLIC_BASE_URL}/{r['slug']}", quote=True)
-            lines.append(
-                f'{i}. 🌐 <a href="{landing_url}"><b>{name}</b></a> | '
-                f'<code>{int(r["landing_visits"] or 0)}</code> | '
-                f'<code>{int(r["telegram_clicks"] or 0)}</code> | '
-                f'<code>{int(r["website_clicks"] or 0)}</code>'
+        for i, r in enumerate(top_rows, 1):
+            creator = ("@" + str(r["name"]))[:18]
+            table.append(
+                f"{i:<2} {creator:<18} "
+                f"{int(r['landing_visits'] or 0):>4} "
+                f"{int(r['telegram_clicks'] or 0):>4} "
+                f"{int(r['website_clicks'] or 0):>4}"
             )
 
-        lines.append("\nTap a creator name to open the landing page.")
-
         await q.message.reply_text(
-            "\n".join(lines),
+            "🏆 <b>Top Performing Pages</b>\n\n"
+            "<pre>" + html.escape("\n".join(table)) + "</pre>"
+            "\n📸 Tap a creator button below to open that Instagram page.",
             parse_mode=ParseMode.HTML,
-            reply_markup=campaign_menu(),
+            reply_markup=campaign_report_creator_keyboard(top_rows),
             disable_web_page_preview=True,
         )
         return
 
     if data == "campaign_links":
         kb, page, total_pages = campaign_links_keyboard(0)
-        await q.message.reply_text(f"🔗 <b>Creator Tracking Links</b>\n\nPage {page+1} of {total_pages}. Tap creator name to open page, or Manage to edit.", parse_mode=ParseMode.HTML, reply_markup=kb)
+        await q.message.reply_text(f"🔗 <b>Creator Tracking Links</b>\n\nPage {page+1} of {total_pages}. Tap creator name to open Instagram, or Manage to edit.", parse_mode=ParseMode.HTML, reply_markup=kb)
         return
 
     if data.startswith("campaign_links_page:"):
