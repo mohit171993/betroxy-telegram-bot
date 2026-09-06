@@ -97,6 +97,7 @@ CAMPAIGN_EDIT_CODE = 34
 CAMPAIGN_EDIT_SOURCE = 35
 CAMPAIGN_DISABLE_BY_LINK = 36
 CAMPAIGN_DELETE_BY_LINK = 37
+VERIFY_PROOF_UPLOAD = 38
 THEME_UPLOAD = 40
 
 
@@ -284,6 +285,32 @@ def init_db():
                 """
                 CREATE INDEX IF NOT EXISTS idx_outbound_events_agent_dest_time
                 ON outbound_events(agent_code, destination, created_at)
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS campaign_verification (
+                    id BIGSERIAL PRIMARY KEY,
+                    campaign_link_id BIGINT NOT NULL REFERENCES campaign_links(id) ON DELETE CASCADE,
+                    campaign_day INTEGER DEFAULT 1,
+                    bio_status TEXT DEFAULT 'pending',
+                    only_our_link_status TEXT DEFAULT 'pending',
+                    story_status TEXT DEFAULT 'pending',
+                    story_link_status TEXT DEFAULT 'pending',
+                    proof_file_id TEXT,
+                    proof_type TEXT,
+                    proof_caption TEXT,
+                    checked_by BIGINT,
+                    checked_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(campaign_link_id, campaign_day)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_campaign_verification_link_day
+                ON campaign_verification(campaign_link_id, campaign_day)
                 """
             )
 
@@ -903,12 +930,302 @@ def campaign_menu():
                 InlineKeyboardButton("📥 Export CSV", callback_data="campaign_export"),
             ],
             [
+                InlineKeyboardButton("✅ Verification Center", callback_data="verify_home"),
                 InlineKeyboardButton("📄 Download PDF", callback_data="campaign_pdf"),
+            ],
+            [
                 InlineKeyboardButton("🎨 Landing Design", callback_data="theme_home"),
             ],
             [InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_home")],
         ]
     )
+
+
+
+VERIFY_STATUS_LABEL = {
+    "verified": "✅",
+    "missing": "❌",
+    "issue": "⚠️",
+    "pending": "⏳",
+}
+
+
+def get_verification_row(campaign_link_id, day=1):
+    day = max(1, min(int(day), 7))
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO campaign_verification (campaign_link_id, campaign_day)
+                VALUES (%s, %s)
+                ON CONFLICT (campaign_link_id, campaign_day) DO NOTHING
+                """,
+                (campaign_link_id, day),
+            )
+            cur.execute(
+                """
+                SELECT * FROM campaign_verification
+                WHERE campaign_link_id=%s AND campaign_day=%s
+                LIMIT 1
+                """,
+                (campaign_link_id, day),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return row
+
+
+def update_verification_status(campaign_link_id, day, field, status, checked_by=None):
+    allowed_fields = {
+        "bio_status",
+        "only_our_link_status",
+        "story_status",
+        "story_link_status",
+    }
+    if field not in allowed_fields:
+        raise ValueError("Invalid verification field")
+    if status not in {"verified", "missing", "issue", "pending"}:
+        raise ValueError("Invalid verification status")
+
+    get_verification_row(campaign_link_id, day)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE campaign_verification
+                SET {field}=%s, checked_by=%s, checked_at=NOW()
+                WHERE campaign_link_id=%s AND campaign_day=%s
+                RETURNING *
+                """,
+                (status, checked_by, campaign_link_id, day),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return row
+
+
+def save_verification_proof(campaign_link_id, day, file_id, proof_type, caption, checked_by=None):
+    get_verification_row(campaign_link_id, day)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE campaign_verification
+                SET proof_file_id=%s,
+                    proof_type=%s,
+                    proof_caption=%s,
+                    checked_by=%s,
+                    checked_at=NOW()
+                WHERE campaign_link_id=%s AND campaign_day=%s
+                RETURNING *
+                """,
+                (
+                    file_id,
+                    proof_type,
+                    caption,
+                    checked_by,
+                    campaign_link_id,
+                    day,
+                ),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return row
+
+
+def verification_summary_rows(day=1):
+    day = max(1, min(int(day), 7))
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    cl.id AS campaign_link_id,
+                    cl.instagram_username,
+                    cl.slug,
+                    cl.agent_code,
+                    COALESCE(cl.source_type,'instagram') AS source_type,
+                    cl.source_url,
+                    COALESCE(v.bio_status,'pending') AS bio_status,
+                    COALESCE(v.only_our_link_status,'pending') AS only_our_link_status,
+                    COALESCE(v.story_status,'pending') AS story_status,
+                    COALESCE(v.story_link_status,'pending') AS story_link_status,
+                    v.proof_file_id,
+                    v.proof_type,
+                    v.proof_caption,
+                    v.checked_at
+                FROM campaign_links cl
+                LEFT JOIN campaign_verification v
+                    ON v.campaign_link_id=cl.id
+                   AND v.campaign_day=%s
+                WHERE cl.is_active=TRUE
+                ORDER BY cl.instagram_username
+                """,
+                (day,),
+            )
+            return cur.fetchall()
+
+
+def verification_creator_keyboard(row, day=1):
+    username = str(row["instagram_username"]).strip().lstrip("@")
+    source = (row.get("source_type") or "instagram").lower()
+    source_url = row.get("source_url")
+    if not source_url:
+        source_url = (
+            f"https://www.instagram.com/{username}/"
+            if source == "instagram"
+            else f"https://t.me/{username}"
+            if source == "telegram"
+            else f"{PUBLIC_BASE_URL}/{row['slug']}"
+        )
+
+    code = row["agent_code"]
+    cid = row["campaign_link_id"]
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🌐 Open Source Page", url=source_url),
+            InlineKeyboardButton("🔗 Open Batraxy Link", url=f"{PUBLIC_BASE_URL}/{row['slug']}"),
+        ],
+        [
+            InlineKeyboardButton("✅ Bio OK", callback_data=f"verify_set:{cid}:{day}:bio_status:verified"),
+            InlineKeyboardButton("❌ Bio Missing", callback_data=f"verify_set:{cid}:{day}:bio_status:missing"),
+        ],
+        [
+            InlineKeyboardButton("✅ Only Our Link", callback_data=f"verify_set:{cid}:{day}:only_our_link_status:verified"),
+            InlineKeyboardButton("⚠️ Extra Link", callback_data=f"verify_set:{cid}:{day}:only_our_link_status:issue"),
+        ],
+        [
+            InlineKeyboardButton("✅ Story Live", callback_data=f"verify_set:{cid}:{day}:story_status:verified"),
+            InlineKeyboardButton("❌ Story Missing", callback_data=f"verify_set:{cid}:{day}:story_status:missing"),
+        ],
+        [
+            InlineKeyboardButton("✅ Story Link OK", callback_data=f"verify_set:{cid}:{day}:story_link_status:verified"),
+            InlineKeyboardButton("⚠️ Story Link Issue", callback_data=f"verify_set:{cid}:{day}:story_link_status:issue"),
+        ],
+        [
+            InlineKeyboardButton("📸 Upload Proof", callback_data=f"verify_upload:{cid}:{day}"),
+            InlineKeyboardButton("👁 View Proof", callback_data=f"verify_view_proof:{cid}:{day}"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Verification List", callback_data=f"verify_day:{day}"),
+            InlineKeyboardButton("🏠 Campaign", callback_data="campaign_home"),
+        ],
+    ])
+
+
+def verification_list_keyboard(rows, day=1, page=0, per_page=8):
+    total_pages = max(1, (len(rows) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    subset = rows[page * per_page:(page + 1) * per_page]
+    buttons = []
+
+    for r in subset:
+        bio = VERIFY_STATUS_LABEL.get(r["bio_status"], "⏳")
+        only = VERIFY_STATUS_LABEL.get(r["only_our_link_status"], "⏳")
+        story = VERIFY_STATUS_LABEL.get(r["story_status"], "⏳")
+        name = str(r["instagram_username"])[:22]
+        buttons.append([
+            InlineKeyboardButton(
+                f"{bio}{only}{story} @{name}",
+                callback_data=f"verify_creator:{r['campaign_link_id']}:{day}",
+            )
+        ])
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"verify_page:{day}:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="campaign_noop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"verify_page:{day}:{page+1}"))
+    buttons.append(nav)
+
+    day_buttons = []
+    for d in range(1, 8):
+        day_buttons.append(InlineKeyboardButton(str(d), callback_data=f"verify_day:{d}"))
+        if len(day_buttons) == 4:
+            buttons.append(day_buttons)
+            day_buttons = []
+    if day_buttons:
+        buttons.append(day_buttons)
+
+    buttons.append([
+        InlineKeyboardButton("📄 Compliance PDF", callback_data=f"verify_pdf:{day}"),
+        InlineKeyboardButton("⬅️ Campaign Tracker", callback_data="campaign_home"),
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
+def verification_creator_text(row, day):
+    bio = VERIFY_STATUS_LABEL.get(row["bio_status"], "⏳")
+    only = VERIFY_STATUS_LABEL.get(row["only_our_link_status"], "⏳")
+    story = VERIFY_STATUS_LABEL.get(row["story_status"], "⏳")
+    story_link = VERIFY_STATUS_LABEL.get(row["story_link_status"], "⏳")
+    checked = row.get("checked_at")
+    checked_text = checked.strftime("%d %b %Y %H:%M UTC") if checked else "Not checked"
+
+    return (
+        f"✅ <b>Campaign Verification</b> — Day {day}/7\n\n"
+        f"Creator: <b>@{html.escape(str(row['instagram_username']))}</b>\n"
+        f"Source: <b>{CAMPAIGN_SOURCE_LABELS.get(row.get('source_type') or 'instagram', 'Instagram')}</b>\n"
+        f"Assigned link: <code>{PUBLIC_BASE_URL}/{html.escape(str(row['slug']))}</code>\n\n"
+        f"Bio Link: <b>{bio} {html.escape(str(row['bio_status']).title())}</b>\n"
+        f"Only Our Link: <b>{only} {html.escape(str(row['only_our_link_status']).title())}</b>\n"
+        f"Story Live: <b>{story} {html.escape(str(row['story_status']).title())}</b>\n"
+        f"Story Link: <b>{story_link} {html.escape(str(row['story_link_status']).title())}</b>\n"
+        f"Proof: <b>{'✅ Available' if row.get('proof_file_id') else '⏳ Not uploaded'}</b>\n"
+        f"Last checked: <b>{checked_text}</b>"
+    )
+
+
+def build_verification_pdf(rows, day):
+    output = io.BytesIO()
+    doc = SimpleDocTemplate(
+        output,
+        pagesize=landscape(A4),
+        rightMargin=26, leftMargin=26, topMargin=28, bottomMargin=28,
+        title=f"BETROXY Campaign Compliance Day {day}",
+        author="BETROXY",
+    )
+    styles = getSampleStyleSheet()
+    story = [
+        Paragraph(f"BETROXY - Campaign Compliance Report - Day {day}/7", styles["Title"]),
+        Spacer(1, 10),
+    ]
+    data = [[
+        "Creator", "Source", "Bio", "Only Our Link", "Story",
+        "Story Link", "Proof", "Last Checked"
+    ]]
+    for r in rows:
+        checked = r.get("checked_at")
+        data.append([
+            "@" + str(r["instagram_username"]),
+            CAMPAIGN_SOURCE_LABELS.get(r.get("source_type") or "instagram", "Instagram"),
+            str(r["bio_status"]).title(),
+            str(r["only_our_link_status"]).title(),
+            str(r["story_status"]).title(),
+            str(r["story_link_status"]).title(),
+            "Yes" if r.get("proof_file_id") else "No",
+            checked.strftime("%d-%m-%Y %H:%M") if checked else "-",
+        ])
+    table = Table(data, repeatRows=1, colWidths=[120, 65, 65, 85, 65, 70, 45, 100])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#081C15")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,-1), 8),
+        ("GRID", (0,0), (-1,-1), .35, colors.HexColor("#B9CCC2")),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [
+            colors.HexColor("#F7FBF9"),
+            colors.HexColor("#EDF6F1"),
+        ]),
+        ("TOPPADDING", (0,0), (-1,-1), 6),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+    ]))
+    story.append(table)
+    doc.build(story)
+    output.seek(0)
+    return output
 
 
 def campaign_report_creator_keyboard(rows):
@@ -3328,6 +3645,88 @@ async def campaign_delete_by_link_resolve(update: Update, context: ContextTypes.
     return ConversationHandler.END
 
 
+
+async def verify_upload_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    _, cid_s, day_s = q.data.split(":", 2)
+    context.user_data["verify_proof_campaign_link_id"] = int(cid_s)
+    context.user_data["verify_proof_day"] = int(day_s)
+
+    await q.message.reply_text(
+        f"📸 <b>Upload Verification Proof — Day {day_s}/7</b>\n\n"
+        "Send a screenshot/photo showing the Story or bio link.\n"
+        "You may also send the screenshot as a document.\n\n"
+        "Use /cancel to cancel.",
+        parse_mode=ParseMode.HTML,
+    )
+    return VERIFY_PROOF_UPLOAD
+
+
+async def verify_upload_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return ConversationHandler.END
+
+    cid = context.user_data.get("verify_proof_campaign_link_id")
+    day = context.user_data.get("verify_proof_day")
+    if not cid or not day:
+        await update.effective_message.reply_text("❌ Verification session expired.")
+        return ConversationHandler.END
+
+    file_id = None
+    proof_type = None
+
+    if update.message.photo:
+        file_id = update.message.photo[-1].file_id
+        proof_type = "photo"
+    elif update.message.document:
+        file_id = update.message.document.file_id
+        proof_type = "document"
+
+    if not file_id:
+        await update.effective_message.reply_text(
+            "Please send a screenshot/photo or image/document file."
+        )
+        return VERIFY_PROOF_UPLOAD
+
+    caption = update.message.caption or ""
+    save_verification_proof(
+        cid,
+        day,
+        file_id,
+        proof_type,
+        caption,
+        update.effective_user.id,
+    )
+
+    rows = verification_summary_rows(day)
+    row = next((x for x in rows if int(x["campaign_link_id"]) == int(cid)), None)
+
+    context.user_data.pop("verify_proof_campaign_link_id", None)
+    context.user_data.pop("verify_proof_day", None)
+
+    await update.effective_message.reply_text(
+        "✅ Proof saved.\n\n" + verification_creator_text(row, day),
+        parse_mode=ParseMode.HTML,
+        reply_markup=verification_creator_keyboard(row, day),
+        disable_web_page_preview=True,
+    )
+    return ConversationHandler.END
+
+
+async def verify_upload_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("verify_proof_campaign_link_id", None)
+    context.user_data.pop("verify_proof_day", None)
+    await update.effective_message.reply_text(
+        "Verification proof upload cancelled.",
+        reply_markup=campaign_menu(),
+    )
+    return ConversationHandler.END
+
+
 async def campaign_add_single_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -3672,6 +4071,110 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"↩️ Rolled back successfully.\n\nNow live: <b>#{t['id']} {html.escape(t['name'])}</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=theme_menu(),
+        )
+        return
+
+
+    if data == "verify_home":
+        rows = verification_summary_rows(1)
+        await q.message.reply_text(
+            "✅ <b>Campaign Verification Center</b>\n\n"
+            "Track whether each creator has the assigned bio link, only your link, "
+            "the agreed Story, and the Story link.\n\n"
+            "Status: ✅ verified  ⚠️ issue  ❌ missing  ⏳ pending\n"
+            "Choose a creator or campaign day:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=verification_list_keyboard(rows, day=1),
+        )
+        return
+
+    if data.startswith("verify_day:"):
+        day = int(data.split(":", 1)[1])
+        rows = verification_summary_rows(day)
+        await q.message.reply_text(
+            f"✅ <b>Verification — Day {day}/7</b>\n\n"
+            "Tap a creator to check/update compliance.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=verification_list_keyboard(rows, day=day),
+        )
+        return
+
+    if data.startswith("verify_page:"):
+        _, day_s, page_s = data.split(":", 2)
+        day, page = int(day_s), int(page_s)
+        rows = verification_summary_rows(day)
+        await q.message.reply_text(
+            f"✅ <b>Verification — Day {day}/7</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=verification_list_keyboard(rows, day=day, page=page),
+        )
+        return
+
+    if data.startswith("verify_creator:"):
+        _, cid_s, day_s = data.split(":", 2)
+        cid, day = int(cid_s), int(day_s)
+        rows = verification_summary_rows(day)
+        row = next((x for x in rows if int(x["campaign_link_id"]) == cid), None)
+        if not row:
+            await q.message.reply_text("❌ Creator not found.", reply_markup=campaign_menu())
+            return
+        await q.message.reply_text(
+            verification_creator_text(row, day),
+            parse_mode=ParseMode.HTML,
+            reply_markup=verification_creator_keyboard(row, day),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if data.startswith("verify_set:"):
+        _, cid_s, day_s, field, status = data.split(":", 4)
+        cid, day = int(cid_s), int(day_s)
+        update_verification_status(cid, day, field, status, q.from_user.id)
+        rows = verification_summary_rows(day)
+        row = next((x for x in rows if int(x["campaign_link_id"]) == cid), None)
+        await q.message.reply_text(
+            verification_creator_text(row, day),
+            parse_mode=ParseMode.HTML,
+            reply_markup=verification_creator_keyboard(row, day),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if data.startswith("verify_view_proof:"):
+        _, cid_s, day_s = data.split(":", 2)
+        cid, day = int(cid_s), int(day_s)
+        v = get_verification_row(cid, day)
+        if not v or not v.get("proof_file_id"):
+            await q.message.reply_text("⏳ No proof uploaded for this day yet.")
+            return
+        caption = (
+            f"📸 <b>Verification Proof — Day {day}/7</b>\n"
+            f"{html.escape(v.get('proof_caption') or '')}"
+        )
+        if v.get("proof_type") == "document":
+            await q.message.reply_document(
+                document=v["proof_file_id"],
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await q.message.reply_photo(
+                photo=v["proof_file_id"],
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    if data.startswith("verify_pdf:"):
+        day = int(data.split(":", 1)[1])
+        rows = verification_summary_rows(day)
+        pdf_file = build_verification_pdf(rows, day)
+        await q.message.reply_document(
+            document=pdf_file,
+            filename=f"BETROXY_Compliance_Day_{day}.pdf",
+            caption=f"📄 <b>Campaign Compliance Report — Day {day}/7</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=verification_list_keyboard(rows, day=day),
         )
         return
 
@@ -4595,6 +5098,24 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    verify_proof_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                verify_upload_start,
+                pattern=r"^verify_upload:"
+            )
+        ],
+        states={
+            VERIFY_PROOF_UPLOAD: [
+                MessageHandler(
+                    (filters.PHOTO | filters.Document.ALL),
+                    verify_upload_save,
+                )
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", verify_upload_cancel)],
+    )
+
     campaign_single_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(campaign_add_single_start, pattern=r"^campaign_add_single$")],
         states={CAMPAIGN_ADD_SINGLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, campaign_add_single_save)]},
@@ -4792,6 +5313,7 @@ def main():
     )
 
     app.add_handler(add_conv)
+    app.add_handler(verify_proof_conv)
     app.add_handler(campaign_single_conv)
     app.add_handler(campaign_edit_username_conv)
     app.add_handler(campaign_edit_slug_conv)
