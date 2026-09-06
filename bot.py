@@ -3286,46 +3286,57 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        table = [
-            f"{'Creator':<16} {'Src':<7} {'Vis':>4} {'Bot':>4} {'Web':>4} {'Dep':>4}",
-            "-" * 44,
+        lines = [
+            "📊 <b>Full Campaign Report</b>",
+            "",
+            "<b>Creator</b> | <b>Src</b> | <b>Vis</b> | <b>Bot</b> | <b>Web</b> | <b>Dep</b>",
+            "────────────────────────",
         ]
+
+        total_vis = total_bot = total_web = total_dep = 0
+
         for r in rows:
-            creator = ("@" + str(r["name"]))[:16]
+            name = html.escape("@" + str(r["name"]))
+            landing_url = html.escape(f"{PUBLIC_BASE_URL}/{r['slug']}", quote=True)
             src = {
                 "instagram": "Insta",
                 "telegram": "TG",
                 "meta_ads": "Meta",
                 "google_ads": "Google",
             }.get(r.get("source_type") or "instagram", "Insta")
-            table.append(
-                f"{creator:<16} {src:<7} "
-                f"{int(r['landing_visits'] or 0):>4} "
-                f"{int(r['telegram_clicks'] or 0):>4} "
-                f"{int(r['website_clicks'] or 0):>4} "
-                f"{int(r['deposits'] or 0):>4}"
+
+            vis = int(r["landing_visits"] or 0)
+            bot_clicks = int(r["telegram_clicks"] or 0)
+            web_clicks = int(r["website_clicks"] or 0)
+            dep = int(r["deposits"] or 0)
+
+            total_vis += vis
+            total_bot += bot_clicks
+            total_web += web_clicks
+            total_dep += dep
+
+            lines.append(
+                f'🌐 <a href="{landing_url}"><b>{name}</b></a> | '
+                f'<code>{src}</code> | '
+                f'<code>{vis}</code> | '
+                f'<code>{bot_clicks}</code> | '
+                f'<code>{web_clicks}</code> | '
+                f'<code>{dep}</code>'
             )
 
-        totals = {
-            "vis": sum(int(r["landing_visits"] or 0) for r in rows),
-            "bot": sum(int(r["telegram_clicks"] or 0) for r in rows),
-            "web": sum(int(r["website_clicks"] or 0) for r in rows),
-            "dep": sum(int(r["deposits"] or 0) for r in rows),
-        }
-        table.extend([
-            "-" * 44,
-            f"{'TOTAL':<16} {'':<7} {totals['vis']:>4} {totals['bot']:>4} {totals['web']:>4} {totals['dep']:>4}",
+        lines.extend([
+            "────────────────────────",
+            f"<b>TOTAL</b> | Vis <b>{total_vis}</b> | Bot <b>{total_bot}</b> | "
+            f"Web <b>{total_web}</b> | Dep <b>{total_dep}</b>",
+            "",
+            "Tap any creator name to open that creator's landing page.",
         ])
 
-        text = (
-            "📊 <b>Full Campaign Report</b>\n\n"
-            "<pre>" + html.escape("\n".join(table)) + "</pre>"
-            f"\n<b>Creators:</b> {len(rows)}"
-        )
         await q.message.reply_text(
-            text,
+            "\n".join(lines),
             parse_mode=ParseMode.HTML,
             reply_markup=campaign_menu(),
+            disable_web_page_preview=True,
         )
         return
 
@@ -3361,24 +3372,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        table = [
-            f"{'#':<2} {'Creator':<19} {'Vis':>4} {'Bot':>4} {'Web':>4}",
-            "-" * 39,
+        lines = [
+            "🏆 <b>Top Performing Pages</b>",
+            "",
+            "<b># Creator</b> | <b>Vis</b> | <b>Bot</b> | <b>Web</b>",
+            "────────────────────────",
         ]
+
         for i, r in enumerate(rows[:10], 1):
-            creator = ("@" + str(r["name"]))[:19]
-            table.append(
-                f"{i:<2} {creator:<19} "
-                f"{int(r['landing_visits'] or 0):>4} "
-                f"{int(r['telegram_clicks'] or 0):>4} "
-                f"{int(r['website_clicks'] or 0):>4}"
+            name = html.escape("@" + str(r["name"]))
+            landing_url = html.escape(f"{PUBLIC_BASE_URL}/{r['slug']}", quote=True)
+            lines.append(
+                f'{i}. 🌐 <a href="{landing_url}"><b>{name}</b></a> | '
+                f'<code>{int(r["landing_visits"] or 0)}</code> | '
+                f'<code>{int(r["telegram_clicks"] or 0)}</code> | '
+                f'<code>{int(r["website_clicks"] or 0)}</code>'
             )
 
+        lines.append("\nTap a creator name to open the landing page.")
+
         await q.message.reply_text(
-            "🏆 <b>Top Performing Pages</b>\n\n"
-            "<pre>" + html.escape("\n".join(table)) + "</pre>",
+            "\n".join(lines),
             parse_mode=ParseMode.HTML,
             reply_markup=campaign_menu(),
+            disable_web_page_preview=True,
         )
         return
 
