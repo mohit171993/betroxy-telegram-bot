@@ -61,6 +61,7 @@ IG_SESSIONID = os.getenv("IG_SESSIONID", "").strip()
 IG_CHECK_INTERVAL_SECONDS = int(os.getenv("IG_CHECK_INTERVAL_SECONDS", "3600"))
 IG_CHECK_TIMEOUT = int(os.getenv("IG_CHECK_TIMEOUT", "18"))
 IG_WEB_APP_ID = os.getenv("IG_WEB_APP_ID", "936619743392459").strip()
+ENABLE_RAILWAY_FREE_CHECKER = os.getenv("ENABLE_RAILWAY_FREE_CHECKER", "0").strip() == "1"
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
@@ -1585,8 +1586,8 @@ def verification_list_keyboard(rows, day=1, page=0, per_page=8):
         buttons.append(day_buttons)
 
     buttons.append([
-        InlineKeyboardButton("🤖 Run Free Check Now", callback_data=f"verify_auto_run:{day}"),
-        InlineKeyboardButton("📊 Auto Report", callback_data=f"verify_auto_report:{day}"),
+        InlineKeyboardButton("📊 Refresh Report", callback_data=f"verify_auto_report:{day}"),
+        InlineKeyboardButton("💻 Checker Status", callback_data="verify_local_status"),
     ])
     buttons.append([
         InlineKeyboardButton("📄 Compliance PDF", callback_data=f"verify_pdf:{day}"),
@@ -1672,9 +1673,9 @@ def automatic_verification_report_text(rows, day):
         f"<b>Compliant:</b> {compliant} | "
         f"<b>Issues:</b> {issues} | "
         f"<b>Pending/Unknown:</b> {pending}\n\n"
-        f"Hourly checker: <b>ON</b>\n"
-        f"Bio checker: <b>Free Instagram web check</b>\n"
-        f"Story checker: <b>{'Enabled with IG_SESSIONID' if IG_SESSIONID else 'Needs IG_SESSIONID for automatic Story inspection'}</b>"
+        f"Recommended checker: <b>Local Browser (free)</b>\n"
+        f"Railway direct checker: <b>{'ON' if ENABLE_RAILWAY_FREE_CHECKER else 'OFF'}</b>\n"
+        f"Bio + Story results update here automatically when the local checker runs."
     )
 
 
@@ -3549,6 +3550,124 @@ def sample_creator_for_preview():
 tracker_api = Flask("betroxy_tracker_api")
 
 
+
+def _verifier_authorized():
+    if not TRACKER_API_SECRET:
+        return False
+    supplied = request.headers.get("X-Tracker-Secret", "")
+    return bool(supplied) and secrets.compare_digest(supplied, TRACKER_API_SECRET)
+
+
+@tracker_api.get("/api/verifier/targets")
+def verifier_targets():
+    if not _verifier_authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, instagram_username, slug, agent_code,
+                       COALESCE(source_type,'instagram') AS source_type,
+                       source_url, created_at
+                FROM campaign_links
+                WHERE is_active=TRUE
+                ORDER BY id
+                """
+            )
+            rows = cur.fetchall()
+
+    targets = []
+    for row in rows:
+        source = (row.get("source_type") or "instagram").lower()
+        username = str(row["instagram_username"]).strip().lstrip("@")
+        targets.append({
+            "campaign_link_id": int(row["id"]),
+            "username": username,
+            "slug": row["slug"],
+            "agent_code": row["agent_code"],
+            "source_type": source,
+            "source_url": row.get("source_url") or (
+                f"https://www.instagram.com/{username}/"
+                if source == "instagram"
+                else f"https://t.me/{username}"
+                if source == "telegram"
+                else None
+            ),
+            "assigned_url": f"{PUBLIC_BASE_URL}/{row['slug']}",
+            "campaign_day": current_campaign_day(row),
+        })
+
+    return jsonify({"ok": True, "targets": targets})
+
+
+@tracker_api.post("/api/verifier/result")
+def verifier_result():
+    if not _verifier_authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        cid = int(payload.get("campaign_link_id"))
+        day = max(1, min(7, int(payload.get("campaign_day") or 1)))
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid campaign_link_id/day"}), 400
+
+    valid_statuses = {"verified", "missing", "issue", "pending", None}
+    bio_status = payload.get("bio_status")
+    only_status = payload.get("only_status")
+    story_status = payload.get("story_status")
+    story_link_status = payload.get("story_link_status")
+
+    if any(x not in valid_statuses for x in [
+        bio_status, only_status, story_status, story_link_status
+    ]):
+        return jsonify({"ok": False, "error": "invalid status"}), 400
+
+    save_auto_verification_result(
+        cid,
+        day,
+        bio_status=bio_status,
+        only_status=only_status,
+        story_status=story_status,
+        story_link_status=story_link_status,
+        auto_status=payload.get("auto_status") or "checked",
+        detail=str(payload.get("detail") or "")[:4000],
+        bio_links=payload.get("detected_bio_links") or [],
+        story_count=int(payload.get("story_count") or 0),
+        checker_mode="local_browser",
+    )
+    return jsonify({"ok": True})
+
+
+@tracker_api.get("/api/verifier/status")
+def verifier_status():
+    if not _verifier_authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE auto_checked_at >= NOW() - INTERVAL '90 minutes'
+                    ) AS recently_checked,
+                    MAX(auto_checked_at) AS last_check
+                FROM campaign_verification
+                WHERE checker_mode='local_browser'
+                """
+            )
+            row = cur.fetchone()
+
+    return jsonify({
+        "ok": True,
+        "mode": "local_browser",
+        "recently_checked": int(row["recently_checked"] or 0),
+        "last_check": row["last_check"].isoformat() if row.get("last_check") else None,
+    })
+
+
 @tracker_api.get("/health")
 def tracker_health():
     return jsonify({"ok": True, "service": "betroxy-instagram-tracker"})
@@ -4576,6 +4695,37 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+
+
+    if data == "verify_local_status":
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (
+                            WHERE auto_checked_at >= NOW() - INTERVAL '90 minutes'
+                              AND checker_mode='local_browser'
+                        ) AS recent,
+                        MAX(auto_checked_at) FILTER (
+                            WHERE checker_mode='local_browser'
+                        ) AS last_check
+                    FROM campaign_verification
+                    """
+                )
+                s = cur.fetchone()
+        last = s.get("last_check")
+        last_text = last.strftime("%d %b %Y %H:%M UTC") if last else "Never"
+        await q.message.reply_text(
+            "💻 <b>Local Instagram Checker</b>\\n\\n"
+            f"Creators checked in last 90 min: <b>{int(s.get('recent') or 0)}</b>\\n"
+            f"Last result received: <b>{last_text}</b>\\n\\n"
+            "This mode uses a real logged-in browser on your Windows PC, "
+            "so it avoids Railway/datacenter blocking and does not require a paid API.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
+        return
 
     if data.startswith("verify_auto_run:"):
         day = int(data.split(":", 1)[1])
@@ -5869,7 +6019,10 @@ def main():
     app.add_error_handler(error_handler)
 
     Thread(target=run_tracker_api, daemon=True).start()
-    Thread(target=free_hourly_verification_worker, daemon=True).start()
+    if ENABLE_RAILWAY_FREE_CHECKER:
+        Thread(target=free_hourly_verification_worker, daemon=True).start()
+    else:
+        logger.info("Railway free Instagram checker disabled; local-browser verifier expected.")
     logger.info("Betroxy Official Bot + Instagram tracker starting...")
     app.run_polling(drop_pending_updates=True)
 
