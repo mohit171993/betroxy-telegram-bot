@@ -95,6 +95,8 @@ CAMPAIGN_EDIT_USERNAME = 32
 CAMPAIGN_EDIT_SLUG = 33
 CAMPAIGN_EDIT_CODE = 34
 CAMPAIGN_EDIT_SOURCE = 35
+CAMPAIGN_DISABLE_BY_LINK = 36
+CAMPAIGN_DELETE_BY_LINK = 37
 THEME_UPLOAD = 40
 
 
@@ -236,6 +238,13 @@ def init_db():
                 UPDATE campaign_links
                 SET source_type='instagram'
                 WHERE source_type IS NULL OR TRIM(source_type)=''
+                """
+            )
+
+            cur.execute(
+                """
+                ALTER TABLE campaign_links
+                ADD COLUMN IF NOT EXISTS source_url TEXT
                 """
             )
 
@@ -886,6 +895,10 @@ def campaign_menu():
                 InlineKeyboardButton("➕ Add 1 Page", callback_data="campaign_add_single"),
             ],
             [
+                InlineKeyboardButton("⛔ Disable by Link", callback_data="campaign_disable_by_link"),
+                InlineKeyboardButton("🗑 Delete by Link", callback_data="campaign_delete_by_link"),
+            ],
+            [
                 InlineKeyboardButton("📚 Bulk Create Links", callback_data="campaign_add_bulk"),
                 InlineKeyboardButton("📥 Export CSV", callback_data="campaign_export"),
             ],
@@ -909,10 +922,26 @@ def campaign_report_creator_keyboard(rows):
 
     for r in rows:
         username = str(r["name"]).strip().lstrip("@")
+        source = (r.get("source_type") or "instagram").lower()
+        icon = {
+            "instagram": "📸",
+            "telegram": "✈️",
+            "meta_ads": "Ⓜ️",
+            "google_ads": "🔎",
+        }.get(source, "🔗")
+        target_url = r.get("source_url")
+        if not target_url:
+            target_url = (
+                f"https://www.instagram.com/{username}/"
+                if source == "instagram"
+                else f"https://t.me/{username}"
+                if source == "telegram"
+                else f"{PUBLIC_BASE_URL}/{r['slug']}"
+            )
         current.append(
             InlineKeyboardButton(
-                f"📸 @{username}",
-                url=f"https://www.instagram.com/{username}/",
+                f"{icon} @{username}",
+                url=target_url,
             )
         )
         if len(current) == 2:
@@ -1315,6 +1344,214 @@ CAMPAIGN_SOURCE_LABELS = {
 }
 
 
+def parse_campaign_input(raw_value, default_source="instagram"):
+    """
+    Accepts:
+      - Instagram profile URL
+      - Telegram profile/channel URL
+      - Batraxy landing URL
+      - @username
+      - plain username
+
+    Returns a normalized dict:
+      source_type, handle, source_url, slug_lookup
+    """
+    raw = (raw_value or "").strip()
+    if not raw:
+        raise ValueError("Please send a valid Instagram/Telegram link or username")
+
+    # Remove common Telegram/WhatsApp copy noise around a URL.
+    match = re.search(r"https?://[^\s]+", raw, flags=re.I)
+    value = match.group(0) if match else raw
+    value = value.strip().strip("<>\"'")
+
+    # Existing Batraxy creator landing URL.
+    m = re.search(r"(?:https?://)?(?:www\.)?batraxy\.com/([^/?#\s]+)", value, flags=re.I)
+    if m:
+        return {
+            "source_type": None,
+            "handle": None,
+            "source_url": None,
+            "slug_lookup": m.group(1).strip(),
+        }
+
+    # Instagram profile URL.
+    m = re.search(
+        r"(?:https?://)?(?:www\.)?instagram\.com/([^/?#\s]+)/?",
+        value,
+        flags=re.I,
+    )
+    if m:
+        handle = m.group(1).strip().lstrip("@")
+        # Avoid treating content route names as creator handles.
+        if handle.lower() in {"p", "reel", "reels", "stories", "explore", "accounts"}:
+            raise ValueError("Please send the Instagram PROFILE link, not a post/reel link")
+        return {
+            "source_type": "instagram",
+            "handle": handle,
+            "source_url": f"https://www.instagram.com/{handle}/",
+            "slug_lookup": None,
+        }
+
+    # Telegram profile/channel URL.
+    m = re.search(
+        r"(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/([^/?#\s]+)/?",
+        value,
+        flags=re.I,
+    )
+    if m:
+        handle = m.group(1).strip().lstrip("@")
+        if handle.lower() in {"joinchat", "share", "addstickers"}:
+            raise ValueError("Please send the Telegram channel/profile link")
+        return {
+            "source_type": "telegram",
+            "handle": handle,
+            "source_url": f"https://t.me/{handle}",
+            "slug_lookup": None,
+        }
+
+    # Plain @username / username. Keep current default as Instagram.
+    handle = value.strip().lstrip("@").split("?")[0].split("#")[0].strip("/")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{2,100}", handle):
+        raise ValueError("Could not identify the page/channel from that link")
+
+    source_type = normalize_campaign_source(default_source)
+    source_url = (
+        f"https://www.instagram.com/{handle}/"
+        if source_type == "instagram"
+        else f"https://t.me/{handle}"
+        if source_type == "telegram"
+        else None
+    )
+    return {
+        "source_type": source_type,
+        "handle": handle,
+        "source_url": source_url,
+        "slug_lookup": None,
+    }
+
+
+def find_campaign_link_from_input(raw_value):
+    parsed = parse_campaign_input(raw_value)
+
+    if parsed["slug_lookup"]:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM campaign_links WHERE LOWER(slug)=LOWER(%s) LIMIT 1",
+                    (parsed["slug_lookup"],),
+                )
+                return cur.fetchone(), parsed
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # Prefer exact source + handle.
+            cur.execute(
+                """
+                SELECT * FROM campaign_links
+                WHERE LOWER(instagram_username)=LOWER(%s)
+                  AND LOWER(COALESCE(source_type,'instagram'))=LOWER(%s)
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (parsed["handle"], parsed["source_type"]),
+            )
+            row = cur.fetchone()
+            if row:
+                return row, parsed
+
+            # Fallback by handle only for older rows.
+            cur.execute(
+                """
+                SELECT * FROM campaign_links
+                WHERE LOWER(instagram_username)=LOWER(%s)
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (parsed["handle"],),
+            )
+            return cur.fetchone(), parsed
+
+
+def set_campaign_link_active(code, active):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE campaign_links
+                SET is_active=%s
+                WHERE LOWER(agent_code)=LOWER(%s)
+                RETURNING *
+                """,
+                (bool(active), code),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return row
+
+
+def cleanup_malformed_campaign_sources():
+    """
+    Repairs older rows where a full Instagram/Telegram URL was accidentally
+    saved in instagram_username. It keeps the existing landing slug/code so
+    already-shared Batraxy links do not break.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, instagram_username, source_type, source_url
+                FROM campaign_links
+                """
+            )
+            rows = cur.fetchall()
+
+            for row in rows:
+                raw = (row["instagram_username"] or "").strip()
+                try:
+                    parsed = parse_campaign_input(raw)
+                except Exception:
+                    parsed = None
+
+                if parsed and parsed.get("handle") and (
+                    "instagram.com/" in raw.lower()
+                    or "t.me/" in raw.lower()
+                    or "telegram.me/" in raw.lower()
+                ):
+                    cur.execute(
+                        """
+                        UPDATE campaign_links
+                        SET instagram_username=%s,
+                            source_type=%s,
+                            source_url=%s
+                        WHERE id=%s
+                        """,
+                        (
+                            parsed["handle"],
+                            parsed["source_type"],
+                            parsed["source_url"],
+                            row["id"],
+                        ),
+                    )
+                elif not row.get("source_url"):
+                    source = (row.get("source_type") or "instagram").lower()
+                    handle = raw.lstrip("@")
+                    if source == "instagram":
+                        source_url = f"https://www.instagram.com/{handle}/"
+                    elif source == "telegram":
+                        source_url = f"https://t.me/{handle}"
+                    else:
+                        source_url = None
+                    if source_url:
+                        cur.execute(
+                            "UPDATE campaign_links SET source_url=%s WHERE id=%s",
+                            (source_url, row["id"]),
+                        )
+        conn.commit()
+
+
+
+
 def normalize_campaign_source(value):
     value = (value or "").strip().lower().replace(" ", "_")
     aliases = {
@@ -1577,30 +1814,57 @@ def ensure_unique_slug_and_code(username):
                 n += 1
 
 
-def create_campaign_creator(username, commission_rate=0):
-    username = username.strip().lstrip("@")
+def create_campaign_creator(raw_input, commission_rate=0, source_type=None):
+    parsed = parse_campaign_input(
+        raw_input,
+        default_source=source_type or "instagram",
+    )
+    if parsed["slug_lookup"]:
+        raise ValueError("For creating a new link, send an Instagram or Telegram profile/channel link")
+
+    username = parsed["handle"]
+    source_type = parsed["source_type"]
+    source_url = parsed["source_url"]
+
     if not username:
-        raise ValueError("Instagram username is empty")
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM campaign_links WHERE LOWER(instagram_username)=LOWER(%s) LIMIT 1",
-                (username,),
-            )
-            existing = cur.fetchone()
-            if existing:
-                return existing, False
-    slug, agent_code = ensure_unique_slug_and_code(username)
-    create_agent(username, agent_code, commission_rate)
+        raise ValueError("Could not identify the creator/channel")
+
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO campaign_links (instagram_username, slug, agent_code, is_active)
-                VALUES (%s, %s, %s, TRUE)
+                SELECT * FROM campaign_links
+                WHERE LOWER(instagram_username)=LOWER(%s)
+                  AND LOWER(COALESCE(source_type,'instagram'))=LOWER(%s)
+                LIMIT 1
+                """,
+                (username, source_type),
+            )
+            existing = cur.fetchone()
+            if existing:
+                # Repair missing URL on an old row.
+                if not existing.get("source_url") and source_url:
+                    cur.execute(
+                        "UPDATE campaign_links SET source_url=%s WHERE id=%s RETURNING *",
+                        (source_url, existing["id"]),
+                    )
+                    existing = cur.fetchone()
+                    conn.commit()
+                return existing, False
+
+    slug, agent_code = ensure_unique_slug_and_code(username)
+    create_agent(username, agent_code, commission_rate)
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO campaign_links
+                    (instagram_username, slug, agent_code, is_active, source_type, source_url)
+                VALUES (%s, %s, %s, TRUE, %s, %s)
                 RETURNING *
                 """,
-                (username, slug, agent_code),
+                (username, slug, agent_code, source_type, source_url),
             )
             row = cur.fetchone()
             conn.commit()
@@ -1727,6 +1991,7 @@ def instagram_tracker_stats(code=None, period="all"):
                     cl.instagram_username AS name,
                     cl.slug,
                     COALESCE(cl.source_type, 'instagram') AS source_type,
+                    cl.source_url,
                     COALESCE(v.landing_visits, 0) AS landing_visits,
                     COALESCE(v.unique_visitors, 0) AS unique_visitors,
                     COALESCE(o.telegram_clicks, 0) AS telegram_clicks,
@@ -2270,7 +2535,14 @@ def rollback_theme():
 
 def inject_theme(theme, link, preview=False):
     slug = link["slug"]
-    instagram = link["instagram_username"]
+    instagram = str(link["instagram_username"]).strip().lstrip("@")
+    # Defensive cleanup for any legacy row that still contains a full source URL.
+    try:
+        parsed_source = parse_campaign_input(instagram)
+        if parsed_source.get("handle"):
+            instagram = parsed_source["handle"]
+    except Exception:
+        pass
     telegram_url = f"{PUBLIC_BASE_URL}/go/{slug}/telegram"
     website_url = f"{PUBLIC_BASE_URL}/go/{slug}/website"
 
@@ -2340,7 +2612,8 @@ body{
   display:inline-flex;align-items:center;gap:8px;
   padding:8px 12px;border-radius:999px;
   background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);
-  color:#c9d8d1;font-size:12px;font-weight:700;letter-spacing:.1px
+  color:#c9d8d1;font-size:12px;font-weight:700;letter-spacing:.1px;
+  max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis
 }
 .dot{width:7px;height:7px;border-radius:50%;background:#22dc8a;box-shadow:0 0 16px #22dc8a}
 .hero{text-align:center;padding:28px 8px 22px}
@@ -2694,7 +2967,16 @@ def campaign_links_keyboard(page=0, per_page=8):
         rows.append([
             InlineKeyboardButton(
                 f"{source_icon} @{username}",
-                url=f"https://www.instagram.com/{username}/",
+                url=(
+                    item.get("source_url")
+                    or (
+                        f"https://www.instagram.com/{username}/"
+                        if source == "instagram"
+                        else f"https://t.me/{username}"
+                        if source == "telegram"
+                        else f"{PUBLIC_BASE_URL}/{item['slug']}"
+                    )
+                ),
             ),
             InlineKeyboardButton(
                 "⚙️ Manage",
@@ -2944,6 +3226,108 @@ async def campaign_edit_source_save(update: Update, context: ContextTypes.DEFAUL
     return ConversationHandler.END
 
 
+
+async def campaign_disable_by_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    await q.message.reply_text(
+        "⛔ <b>Disable Creator Link</b>\\n\\n"
+        "Send the Instagram/Telegram profile link, @username, or Batraxy landing link.\\n\\n"
+        "Example:\\n<code>https://www.instagram.com/saketeditt/</code>",
+        parse_mode=ParseMode.HTML,
+    )
+    return CAMPAIGN_DISABLE_BY_LINK
+
+
+async def campaign_disable_by_link_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return ConversationHandler.END
+
+    raw = (update.message.text or "").strip()
+    try:
+        row, parsed = find_campaign_link_from_input(raw)
+        if not row:
+            raise ValueError("No matching creator link found")
+
+        disabled = set_campaign_link_active(row["agent_code"], False)
+        await update.message.reply_text(
+            "⛔ <b>Creator Link Disabled</b>\\n\\n"
+            f"Page/Channel: <b>@{html.escape(str(disabled['instagram_username']))}</b>\\n"
+            f"Slug: <code>{html.escape(str(disabled['slug']))}</code>\\n"
+            f"Old landing: <code>{PUBLIC_BASE_URL}/{html.escape(str(disabled['slug']))}</code>\\n\\n"
+            "Historical tracking data is preserved.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        await update.message.reply_text(
+            f"❌ {html.escape(str(exc))}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
+    return ConversationHandler.END
+
+
+async def campaign_delete_by_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    await q.message.reply_text(
+        "🗑 <b>Delete Creator Link</b>\\n\\n"
+        "Send the Instagram/Telegram profile link, @username, or Batraxy landing link.\\n\\n"
+        "The bot will identify the correct creator and ask for confirmation.",
+        parse_mode=ParseMode.HTML,
+    )
+    return CAMPAIGN_DELETE_BY_LINK
+
+
+async def campaign_delete_by_link_resolve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return ConversationHandler.END
+
+    raw = (update.message.text or "").strip()
+    try:
+        row, parsed = find_campaign_link_from_input(raw)
+        if not row:
+            raise ValueError("No matching creator link found")
+
+        source_label = CAMPAIGN_SOURCE_LABELS.get(
+            row.get("source_type") or "instagram",
+            "Instagram",
+        )
+        await update.message.reply_text(
+            "⚠️ <b>Confirm Delete</b>\\n\\n"
+            f"Source: <b>{source_label}</b>\\n"
+            f"Page/Channel: <b>@{html.escape(str(row['instagram_username']))}</b>\\n"
+            f"Landing: <code>{PUBLIC_BASE_URL}/{html.escape(str(row['slug']))}</code>\\n\\n"
+            "Delete this campaign link?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🗑 YES, DELETE",
+                        callback_data=f"campaign_delete_yes:{row['agent_code']}",
+                    )
+                ],
+                [InlineKeyboardButton("❌ Cancel", callback_data="campaign_home")],
+            ]),
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        await update.message.reply_text(
+            f"❌ {html.escape(str(exc))}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
+    return ConversationHandler.END
+
+
 async def campaign_add_single_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -2951,7 +3335,12 @@ async def campaign_add_single_start(update: Update, context: ContextTypes.DEFAUL
         await q.message.reply_text("❌ Admin access required.")
         return ConversationHandler.END
     await q.message.reply_text(
-        "➕ <b>Create Creator Link</b>\n\nSend Instagram username, e.g. <code>new_cricket_page</code>.",
+        "➕ <b>Create Creator Link</b>\n\n"
+        "Send the Instagram profile link or Telegram channel/profile link.\n\n"
+        "Examples:\n"
+        "<code>https://www.instagram.com/saketeditt/</code>\n"
+        "<code>https://t.me/examplechannel</code>\n\n"
+        "The bot will identify the source and create the slug automatically.",
         parse_mode=ParseMode.HTML,
     )
     return CAMPAIGN_ADD_SINGLE
@@ -2960,13 +3349,19 @@ async def campaign_add_single_start(update: Update, context: ContextTypes.DEFAUL
 async def campaign_add_single_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update):
         return ConversationHandler.END
-    username = (update.message.text or "").strip().lstrip("@")
+    raw_input = (update.message.text or "").strip()
     try:
-        row, created = create_campaign_creator(username)
+        row, created = create_campaign_creator(raw_input)
         landing, telegram = creator_urls(row)
+        source_label = CAMPAIGN_SOURCE_LABELS.get(
+            row.get("source_type") or "instagram",
+            row.get("source_type") or "Instagram",
+        )
         await update.message.reply_text(
             ("✅ Created" if created else "ℹ️ Already existed") +
-            f"\n\nInstagram: <b>@{row['instagram_username']}</b>"
+            f"\n\nSource: <b>{source_label}</b>"
+            f"\nPage/Channel: <b>@{row['instagram_username']}</b>"
+            f"\nSlug: <code>{row['slug']}</code>"
             f"\nLanding:\n<code>{landing}</code>"
             f"\n\nTelegram:\n<code>{telegram}</code>"
             f"\n\nAgent code: <code>{row['agent_code']}</code>",
@@ -2987,7 +3382,9 @@ async def campaign_add_bulk_start(update: Update, context: ContextTypes.DEFAULT_
         await q.message.reply_text("❌ Admin access required.")
         return ConversationHandler.END
     await q.message.reply_text(
-        "📚 <b>Bulk Create Links</b>\n\nPaste Instagram usernames, one per line. Up to 100 at once.",
+        "📚 <b>Bulk Create Links</b>\n\n"
+        "Paste Instagram or Telegram profile/channel links, one per line. Up to 100 at once.\n"
+        "The source and slug will be identified automatically.",
         parse_mode=ParseMode.HTML,
     )
     return CAMPAIGN_ADD_BULK
@@ -2997,20 +3394,20 @@ async def campaign_add_bulk_save(update: Update, context: ContextTypes.DEFAULT_T
     if not await require_admin(update):
         return ConversationHandler.END
     raw = update.message.text or ""
-    names, seen = [], set()
+    items, seen = [], set()
     for line in raw.splitlines():
-        item = line.strip().lstrip("@").split(",")[0].strip()
+        item = line.strip()
         if item and item.lower() not in seen:
             seen.add(item.lower())
-            names.append(item)
-    names = names[:100]
+            items.append(item)
+    items = items[:100]
     created_rows, existing_rows, failed = [], [], []
-    for username in names:
+    for item in items:
         try:
-            row, created = create_campaign_creator(username)
+            row, created = create_campaign_creator(item)
             (created_rows if created else existing_rows).append(row)
         except Exception as e:
-            failed.append((username, str(e)))
+            failed.append((item, str(e)))
     lines = [
         "✅ <b>Bulk Generation Complete</b>",
         "",
@@ -4171,6 +4568,7 @@ async def post_init(app: Application):
 def main():
     init_db()
 
+    cleanup_malformed_campaign_sources()
     ensure_polished_builtin_theme_once()
     app = (
         Application.builder()
@@ -4260,6 +4658,42 @@ def main():
                 CallbackQueryHandler(
                     campaign_edit_source_save,
                     pattern=r"^campaign_source_set:"
+                )
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", campaign_cancel)],
+    )
+
+    campaign_disable_by_link_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                campaign_disable_by_link_start,
+                pattern=r"^campaign_disable_by_link$",
+            )
+        ],
+        states={
+            CAMPAIGN_DISABLE_BY_LINK: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    campaign_disable_by_link_save,
+                )
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", campaign_cancel)],
+    )
+
+    campaign_delete_by_link_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                campaign_delete_by_link_start,
+                pattern=r"^campaign_delete_by_link$",
+            )
+        ],
+        states={
+            CAMPAIGN_DELETE_BY_LINK: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    campaign_delete_by_link_resolve,
                 )
             ]
         },
@@ -4363,6 +4797,8 @@ def main():
     app.add_handler(campaign_edit_slug_conv)
     app.add_handler(campaign_edit_code_conv)
     app.add_handler(campaign_edit_source_conv)
+    app.add_handler(campaign_disable_by_link_conv)
+    app.add_handler(campaign_delete_by_link_conv)
     app.add_handler(campaign_bulk_conv)
     app.add_handler(theme_upload_conv)
     app.add_handler(search_conv)
