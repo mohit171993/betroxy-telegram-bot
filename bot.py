@@ -85,6 +85,9 @@ EDIT_CODE = 22
 EDIT_URL = 23
 CAMPAIGN_ADD_SINGLE = 30
 CAMPAIGN_ADD_BULK = 31
+CAMPAIGN_EDIT_USERNAME = 32
+CAMPAIGN_EDIT_SLUG = 33
+CAMPAIGN_EDIT_CODE = 34
 THEME_UPLOAD = 40
 
 
@@ -876,9 +879,28 @@ def campaign_menu():
 def campaign_creator_menu(code):
     return InlineKeyboardMarkup(
         [
+            [
+                InlineKeyboardButton("✏️ Edit", callback_data=f"campaign_edit:{code}"),
+                InlineKeyboardButton("🗑 Delete", callback_data=f"campaign_delete_confirm:{code}"),
+            ],
             [InlineKeyboardButton("🔄 Refresh", callback_data=f"campaign_creator:{code}")],
             [InlineKeyboardButton("⬅️ Creator Links", callback_data="campaign_links")],
             [InlineKeyboardButton("🏠 Campaign Tracker", callback_data="campaign_home")],
+        ]
+    )
+
+
+def campaign_edit_menu(code):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("👤 Instagram Name", callback_data=f"campaign_edit_username:{code}"),
+                InlineKeyboardButton("🔗 Landing Slug", callback_data=f"campaign_edit_slug:{code}"),
+            ],
+            [
+                InlineKeyboardButton("🆔 Affiliate Code", callback_data=f"campaign_edit_code:{code}"),
+            ],
+            [InlineKeyboardButton("⬅️ Back", callback_data=f"campaign_creator:{code}")],
         ]
     )
 
@@ -1221,6 +1243,169 @@ async def create_instagram_affiliates(
 # ============================================================
 # INSTAGRAM LINK TRACKER
 # ============================================================
+
+
+def update_campaign_username(code, new_username):
+    new_username = new_username.strip().lstrip("@")
+    if not new_username:
+        raise ValueError("Instagram username cannot be empty")
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id FROM campaign_links
+                WHERE LOWER(instagram_username)=LOWER(%s)
+                  AND LOWER(agent_code)<>LOWER(%s)
+                LIMIT 1
+                """,
+                (new_username, code),
+            )
+            if cur.fetchone():
+                raise ValueError("That Instagram username already exists")
+
+            cur.execute(
+                """
+                UPDATE campaign_links
+                SET instagram_username=%s
+                WHERE LOWER(agent_code)=LOWER(%s)
+                RETURNING *
+                """,
+                (new_username, code),
+            )
+            row = cur.fetchone()
+
+            # Keep affiliate display name aligned with creator username.
+            if row:
+                cur.execute(
+                    """
+                    UPDATE agents
+                    SET name=%s
+                    WHERE LOWER(code)=LOWER(%s)
+                    """,
+                    (new_username, code),
+                )
+            conn.commit()
+            return row
+
+
+def update_campaign_slug(code, new_slug):
+    new_slug = re.sub(r"[^a-z0-9-]+", "-", new_slug.strip().lower())
+    new_slug = re.sub(r"-+", "-", new_slug).strip("-")
+    if len(new_slug) < 2:
+        raise ValueError("Slug must contain at least 2 characters")
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id FROM campaign_links
+                WHERE LOWER(slug)=LOWER(%s)
+                  AND LOWER(agent_code)<>LOWER(%s)
+                LIMIT 1
+                """,
+                (new_slug, code),
+            )
+            if cur.fetchone():
+                raise ValueError("That landing-page slug already exists")
+
+            cur.execute(
+                """
+                UPDATE campaign_links
+                SET slug=%s
+                WHERE LOWER(agent_code)=LOWER(%s)
+                RETURNING *
+                """,
+                (new_slug, code),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return row
+
+
+def update_campaign_agent_code(old_code, new_code):
+    new_code = new_code.strip().lower()
+    if not re.fullmatch(r"[a-z0-9_]{2,40}", new_code):
+        raise ValueError("Code must use only letters, numbers or underscore")
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id FROM agents
+                WHERE LOWER(code)=LOWER(%s)
+                  AND LOWER(code)<>LOWER(%s)
+                LIMIT 1
+                """,
+                (new_code, old_code),
+            )
+            if cur.fetchone():
+                raise ValueError("That affiliate code already exists")
+
+            cur.execute(
+                """
+                SELECT id FROM campaign_links
+                WHERE LOWER(agent_code)=LOWER(%s)
+                  AND LOWER(agent_code)<>LOWER(%s)
+                LIMIT 1
+                """,
+                (new_code, old_code),
+            )
+            if cur.fetchone():
+                raise ValueError("That creator code already exists")
+
+            # Change the affiliate code and campaign code together.
+            cur.execute(
+                "UPDATE agents SET code=%s WHERE LOWER(code)=LOWER(%s)",
+                (new_code, old_code),
+            )
+            cur.execute(
+                """
+                UPDATE campaign_links
+                SET agent_code=%s
+                WHERE LOWER(agent_code)=LOWER(%s)
+                RETURNING *
+                """,
+                (new_code, old_code),
+            )
+            row = cur.fetchone()
+
+            # Preserve historic tracker continuity by rewriting event codes.
+            cur.execute(
+                "UPDATE landing_events SET agent_code=%s WHERE LOWER(agent_code)=LOWER(%s)",
+                (new_code, old_code),
+            )
+            cur.execute(
+                "UPDATE outbound_events SET agent_code=%s WHERE LOWER(agent_code)=LOWER(%s)",
+                (new_code, old_code),
+            )
+            cur.execute(
+                "UPDATE conversion_events SET agent_code=%s WHERE LOWER(agent_code)=LOWER(%s)",
+                (new_code, old_code),
+            )
+            conn.commit()
+            return row
+
+
+def delete_campaign_link(code):
+    """
+    Permanently removes only the creator tracking link.
+    Affiliate account and historical event data are intentionally preserved.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM campaign_links
+                WHERE LOWER(agent_code)=LOWER(%s)
+                RETURNING *
+                """,
+                (code,),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return row
+
 
 def list_campaign_links(limit=500):
     with get_db() as conn:
@@ -2260,6 +2445,149 @@ def make_campaign_csv():
     return out.getvalue()
 
 
+
+async def campaign_edit_username_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    code_value = q.data.split(":", 1)[1]
+    row = campaign_link_by_code(code_value)
+    if not row:
+        await q.message.reply_text("❌ Creator link not found.")
+        return ConversationHandler.END
+
+    context.user_data["campaign_edit_code"] = code_value
+    await q.message.reply_text(
+        f"👤 <b>Edit Instagram Name</b>\n\n"
+        f"Current: <code>@{row['instagram_username']}</code>\n\n"
+        "Send the new Instagram username:",
+        parse_mode=ParseMode.HTML,
+    )
+    return CAMPAIGN_EDIT_USERNAME
+
+
+async def campaign_edit_username_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return ConversationHandler.END
+    code_value = context.user_data.get("campaign_edit_code")
+    try:
+        row = update_campaign_username(code_value, update.message.text or "")
+        if not row:
+            raise ValueError("Creator link not found")
+        await update.message.reply_text(
+            f"✅ Instagram name updated to <b>@{row['instagram_username']}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_creator_menu(row["agent_code"]),
+        )
+    except Exception as exc:
+        await update.message.reply_text(f"❌ {exc}")
+        return CAMPAIGN_EDIT_USERNAME
+    finally:
+        if code_value:
+            context.user_data.pop("campaign_edit_code", None)
+    return ConversationHandler.END
+
+
+async def campaign_edit_slug_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    code_value = q.data.split(":", 1)[1]
+    row = campaign_link_by_code(code_value)
+    if not row:
+        await q.message.reply_text("❌ Creator link not found.")
+        return ConversationHandler.END
+
+    context.user_data["campaign_edit_code"] = code_value
+    await q.message.reply_text(
+        f"🔗 <b>Edit Landing Slug</b>\n\n"
+        f"Current: <code>{row['slug']}</code>\n"
+        f"Current URL: <code>{PUBLIC_BASE_URL}/{row['slug']}</code>\n\n"
+        "Send the new slug, for example: <code>5wides-new</code>",
+        parse_mode=ParseMode.HTML,
+    )
+    return CAMPAIGN_EDIT_SLUG
+
+
+async def campaign_edit_slug_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return ConversationHandler.END
+    code_value = context.user_data.get("campaign_edit_code")
+    try:
+        row = update_campaign_slug(code_value, update.message.text or "")
+        if not row:
+            raise ValueError("Creator link not found")
+        landing, _ = creator_urls(row)
+        await update.message.reply_text(
+            f"✅ Landing slug updated.\n\n"
+            f"New URL:\n<code>{landing}</code>\n\n"
+            "⚠️ The old landing URL will no longer open this creator page.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_creator_menu(row["agent_code"]),
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        await update.message.reply_text(f"❌ {exc}")
+        return CAMPAIGN_EDIT_SLUG
+    finally:
+        if code_value:
+            context.user_data.pop("campaign_edit_code", None)
+    return ConversationHandler.END
+
+
+async def campaign_edit_code_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    old_code = q.data.split(":", 1)[1]
+    row = campaign_link_by_code(old_code)
+    if not row:
+        await q.message.reply_text("❌ Creator link not found.")
+        return ConversationHandler.END
+
+    context.user_data["campaign_edit_old_code"] = old_code
+    await q.message.reply_text(
+        f"🆔 <b>Edit Affiliate Code</b>\n\n"
+        f"Current: <code>{old_code}</code>\n\n"
+        "Send the new code.\n"
+        "Use letters, numbers or underscore only.\n\n"
+        "This also updates the Telegram referral link and preserves existing tracker history.",
+        parse_mode=ParseMode.HTML,
+    )
+    return CAMPAIGN_EDIT_CODE
+
+
+async def campaign_edit_code_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return ConversationHandler.END
+    old_code = context.user_data.get("campaign_edit_old_code")
+    try:
+        row = update_campaign_agent_code(old_code, update.message.text or "")
+        if not row:
+            raise ValueError("Creator link not found")
+        _, telegram = creator_urls(row)
+        await update.message.reply_text(
+            f"✅ Affiliate code updated.\n\n"
+            f"New code: <code>{row['agent_code']}</code>\n"
+            f"Telegram:\n<code>{telegram}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_creator_menu(row["agent_code"]),
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        await update.message.reply_text(f"❌ {exc}")
+        return CAMPAIGN_EDIT_CODE
+    finally:
+        context.user_data.pop("campaign_edit_old_code", None)
+    return ConversationHandler.END
+
+
 async def campaign_add_single_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -2644,6 +2972,64 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         page = int(data.split(":",1)[1])
         kb, page, total_pages = campaign_links_keyboard(page)
         await q.message.reply_text(f"🔗 <b>Creator Tracking Links</b>\n\nPage {page+1} of {total_pages}.", parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+
+    if data.startswith("campaign_edit:"):
+        c = data.split(":", 1)[1]
+        row = campaign_link_by_code(c)
+        if not row:
+            await q.message.reply_text("❌ Creator link not found.", reply_markup=campaign_menu())
+            return
+        await q.message.reply_text(
+            f"✏️ <b>Edit Creator Link</b>\n\n"
+            f"Instagram: <b>@{row['instagram_username']}</b>\n"
+            f"Slug: <code>{row['slug']}</code>\n"
+            f"Affiliate code: <code>{row['agent_code']}</code>\n\n"
+            "Choose what you want to edit:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_edit_menu(c),
+        )
+        return
+
+    if data.startswith("campaign_delete_confirm:"):
+        c = data.split(":", 1)[1]
+        row = campaign_link_by_code(c)
+        if not row:
+            await q.message.reply_text("❌ Creator link not found.", reply_markup=campaign_menu())
+            return
+        await q.message.reply_text(
+            "⚠️ <b>Delete Creator Link?</b>\n\n"
+            f"Instagram: <b>@{row['instagram_username']}</b>\n"
+            f"Landing: <code>{PUBLIC_BASE_URL}/{row['slug']}</code>\n\n"
+            "This removes the creator landing link from the campaign.\n"
+            "The affiliate account and historical tracking data will be kept.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "🗑 YES, DELETE LINK",
+                    callback_data=f"campaign_delete_yes:{c}"
+                )],
+                [InlineKeyboardButton("❌ Cancel", callback_data=f"campaign_creator:{c}")],
+            ]),
+        )
+        return
+
+    if data.startswith("campaign_delete_yes:"):
+        c = data.split(":", 1)[1]
+        deleted = delete_campaign_link(c)
+        if not deleted:
+            await q.message.reply_text("❌ Creator link not found.", reply_markup=campaign_menu())
+            return
+        await q.message.reply_text(
+            f"🗑 <b>Creator Link Deleted</b>\n\n"
+            f"Instagram: <b>@{deleted['instagram_username']}</b>\n"
+            f"Old landing: <code>{PUBLIC_BASE_URL}/{deleted['slug']}</code>\n\n"
+            "Affiliate account and historical tracking data were preserved.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+            disable_web_page_preview=True,
+        )
         return
 
     if data.startswith("campaign_creator:"):
@@ -3350,6 +3736,51 @@ def main():
         fallbacks=[CommandHandler("cancel", campaign_cancel)],
     )
 
+    campaign_edit_username_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                campaign_edit_username_start,
+                pattern=r"^campaign_edit_username:"
+            )
+        ],
+        states={
+            CAMPAIGN_EDIT_USERNAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, campaign_edit_username_save)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", campaign_cancel)],
+    )
+
+    campaign_edit_slug_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                campaign_edit_slug_start,
+                pattern=r"^campaign_edit_slug:"
+            )
+        ],
+        states={
+            CAMPAIGN_EDIT_SLUG: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, campaign_edit_slug_save)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", campaign_cancel)],
+    )
+
+    campaign_edit_code_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                campaign_edit_code_start,
+                pattern=r"^campaign_edit_code:"
+            )
+        ],
+        states={
+            CAMPAIGN_EDIT_CODE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, campaign_edit_code_save)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", campaign_cancel)],
+    )
+
     campaign_bulk_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(campaign_add_bulk_start, pattern=r"^campaign_add_bulk$")],
         states={CAMPAIGN_ADD_BULK: [MessageHandler(filters.TEXT & ~filters.COMMAND, campaign_add_bulk_save)]},
@@ -3443,6 +3874,9 @@ def main():
 
     app.add_handler(add_conv)
     app.add_handler(campaign_single_conv)
+    app.add_handler(campaign_edit_username_conv)
+    app.add_handler(campaign_edit_slug_conv)
+    app.add_handler(campaign_edit_code_conv)
     app.add_handler(campaign_bulk_conv)
     app.add_handler(theme_upload_conv)
     app.add_handler(search_conv)
