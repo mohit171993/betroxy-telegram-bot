@@ -2645,8 +2645,28 @@ def campaign_links_keyboard(page=0, per_page=8):
     page = max(0, min(page, total_pages-1))
     subset = links[page*per_page:(page+1)*per_page]
     rows = []
+
     for item in subset:
-        rows.append([InlineKeyboardButton(f"@{item['instagram_username']}", callback_data=f"campaign_creator:{item['agent_code']}")])
+        landing_url = f"{PUBLIC_BASE_URL}/{item['slug']}"
+        source = (item.get("source_type") or "instagram").lower()
+        source_icon = {
+            "instagram": "📸",
+            "telegram": "✈️",
+            "meta_ads": "Ⓜ️",
+            "google_ads": "🔎",
+        }.get(source, "🔗")
+
+        rows.append([
+            InlineKeyboardButton(
+                f"{source_icon} @{item['instagram_username']}",
+                url=landing_url,
+            ),
+            InlineKeyboardButton(
+                "⚙️ Manage",
+                callback_data=f"campaign_creator:{item['agent_code']}",
+            ),
+        ])
+
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("⬅️", callback_data=f"campaign_links_page:{page-1}"))
@@ -3364,7 +3384,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "campaign_links":
         kb, page, total_pages = campaign_links_keyboard(0)
-        await q.message.reply_text(f"🔗 <b>Creator Tracking Links</b>\n\nPage {page+1} of {total_pages}. Tap a creator.", parse_mode=ParseMode.HTML, reply_markup=kb)
+        await q.message.reply_text(f"🔗 <b>Creator Tracking Links</b>\n\nPage {page+1} of {total_pages}. Tap creator name to open page, or Manage to edit.", parse_mode=ParseMode.HTML, reply_markup=kb)
         return
 
     if data.startswith("campaign_links_page:"):
