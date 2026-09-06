@@ -1728,6 +1728,56 @@ def publish_theme(theme_id):
     return True
 
 
+
+def ensure_polished_builtin_theme_once():
+    """
+    One-time migration:
+    The earlier Super Platform may already have a simplified landing theme
+    saved as the active theme in PostgreSQL. That database theme overrides
+    DEFAULT_LANDING_HTML even after bot.py is updated.
+
+    Create/publish the polished built-in theme only once. After it exists,
+    admins remain free to publish another uploaded theme later; restarts will
+    not force this theme again.
+    """
+    theme_name = "BETROXY Polished Built-in v2"
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, is_active FROM landing_themes WHERE name=%s ORDER BY id DESC LIMIT 1",
+                (theme_name,),
+            )
+            existing = cur.fetchone()
+
+            if existing:
+                return existing["id"]
+
+            cur.execute(
+                """
+                INSERT INTO landing_themes (name, index_html, created_by)
+                VALUES (%s, %s, %s)
+                RETURNING id
+                """,
+                (theme_name, DEFAULT_LANDING_HTML, ADMIN_ID),
+            )
+            theme_id = cur.fetchone()["id"]
+
+            cur.execute("UPDATE landing_themes SET is_active=FALSE WHERE is_active=TRUE")
+            cur.execute(
+                "UPDATE landing_themes SET is_active=TRUE, published_at=NOW() WHERE id=%s",
+                (theme_id,),
+            )
+            cur.execute(
+                "INSERT INTO theme_publish_history (theme_id) VALUES (%s)",
+                (theme_id,),
+            )
+        conn.commit()
+
+    logger.info("Published one-time polished built-in landing theme id=%s", theme_id)
+    return theme_id
+
+
 def rollback_theme():
     current = active_theme()
     with get_db() as conn:
@@ -1994,7 +2044,7 @@ def outbound_redirect(slug, destination):
     slug = slug.strip().lower()
     destination = destination.strip().lower()
     link = campaign_link_by_slug(slug)
-    if not link or destination not in {"telegram", "website"}:
+    if not link or destination not in {"telegram", "website", "casino", "sportsbook", "popular", "promotions"}:
         return Response("Not found", status=404)
 
     record_outbound_click(slug, destination)
@@ -3268,6 +3318,7 @@ async def post_init(app: Application):
 def main():
     init_db()
 
+    ensure_polished_builtin_theme_once()
     app = (
         Application.builder()
         .token(BOT_TOKEN)
