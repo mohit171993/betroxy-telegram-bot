@@ -4,7 +4,15 @@ import io
 import logging
 import re
 import secrets
+import hashlib
+import zipfile
+import mimetypes
+import html
+from urllib.parse import urlencode
 from datetime import datetime, timezone
+from threading import Thread
+
+from flask import Flask, jsonify, request, redirect, Response
 
 import psycopg
 from psycopg.rows import dict_row
@@ -34,6 +42,12 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+TRACKER_API_SECRET = os.getenv("TRACKER_API_SECRET", "")
+PORT = int(os.getenv("PORT", "8080"))
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://www.batraxy.com").rstrip("/")
+BETROXY_BOT_URL = os.getenv("BETROXY_BOT_URL", "https://t.me/BetroxyBot")
+BETROXY_WEB_URL = os.getenv("BETROXY_WEB_URL", "https://betroxy.com/")
+THEME_UPLOAD_MAX_MB = int(os.getenv("THEME_UPLOAD_MAX_MB", "20"))
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
@@ -69,6 +83,9 @@ EDIT_NAME = 20
 EDIT_RATE = 21
 EDIT_CODE = 22
 EDIT_URL = 23
+CAMPAIGN_ADD_SINGLE = 30
+CAMPAIGN_ADD_BULK = 31
+THEME_UPLOAD = 40
 
 
 # ============================================================
@@ -141,6 +158,169 @@ def init_db():
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_claim_token
                 ON agents(claim_token)
                 WHERE claim_token IS NOT NULL
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS landing_clicks (
+                    id BIGSERIAL PRIMARY KEY,
+                    slug TEXT NOT NULL,
+                    agent_code TEXT NOT NULL,
+                    ip_hash TEXT,
+                    user_agent TEXT,
+                    referer TEXT,
+                    clicked_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_landing_clicks_agent_time
+                ON landing_clicks(agent_code, clicked_at)
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conversion_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    agent_code TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    external_user_id TEXT,
+                    amount NUMERIC(18,2) DEFAULT 0,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_conversion_events_agent_time
+                ON conversion_events(agent_code, event_type, created_at)
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS campaign_links (
+                    id BIGSERIAL PRIMARY KEY,
+                    instagram_username TEXT NOT NULL,
+                    slug TEXT UNIQUE NOT NULL,
+                    agent_code TEXT UNIQUE NOT NULL,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS landing_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    slug TEXT NOT NULL,
+                    agent_code TEXT NOT NULL,
+                    visitor_hash TEXT,
+                    user_agent TEXT,
+                    referer TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_landing_events_agent_time
+                ON landing_events(agent_code, created_at)
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS outbound_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    slug TEXT NOT NULL,
+                    agent_code TEXT NOT NULL,
+                    destination TEXT NOT NULL,
+                    visitor_hash TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_outbound_events_agent_dest_time
+                ON outbound_events(agent_code, destination, created_at)
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS landing_themes (
+                    id BIGSERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    index_html TEXT NOT NULL,
+                    created_by BIGINT,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    published_at TIMESTAMPTZ,
+                    is_active BOOLEAN DEFAULT FALSE
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS landing_theme_assets (
+                    id BIGSERIAL PRIMARY KEY,
+                    theme_id BIGINT NOT NULL REFERENCES landing_themes(id) ON DELETE CASCADE,
+                    path TEXT NOT NULL,
+                    mime_type TEXT,
+                    content BYTEA NOT NULL,
+                    UNIQUE(theme_id, path)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS theme_publish_history (
+                    id BIGSERIAL PRIMARY KEY,
+                    theme_id BIGINT NOT NULL REFERENCES landing_themes(id) ON DELETE CASCADE,
+                    published_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                INSERT INTO campaign_links (instagram_username, slug, agent_code)
+                VALUES
+                ('fakt_cricket_memes','fakt-cricket-memes','faktcricket'),
+                ('ritikwins','ritikwins','ritikwins'),
+                ('theankuedit','theankuedit','theankuedit'),
+                ('5wides','5wides','5wides'),
+                ('cricket.official10','cricket-official10','cricketofficial10'),
+                ('bharath._editss','bharath-editss','bharatheditss'),
+                ('ryuzakiii.exeeeeee','ryuzakiii-exeeeeee','ryuzakiiiexe'),
+                ('cric__master18','cric-master18','cricmaster18'),
+                ('akash_mahi0007','akash-mahi0007','akashmahi0007'),
+                ('cricysaakir2.0','cricysaakir2-0','cricysaakir20'),
+                ('ishankishan32_','ishankishan32','ishankishan32'),
+                ('rsnreel','rsnreel','rsnreel'),
+                ('fahadcricketreviews','fahadcricketreviews','fahadcricket'),
+                ('cricsays','cricsays','cricsays'),
+                ('saketeditt','saketeditt','saketeditt'),
+                ('rohit_sharma_status._45','rohit-sharma-status-45','rohitstatus45'),
+                ('official_bobby_4uhh_','official-bobby-4uhh','officialbobby4'),
+                ('surat_tennis_cricket_','surat-tennis-cricket','surattennis'),
+                ('cricket_exeee','cricket-exeee','cricketexeee'),
+                ('smriti_jemi_lovers','smriti-jemi-lovers','smritijemi'),
+                ('maxxo_editz_45','maxxo-editz-45','maxxoeditz45'),
+                ('rohit_sharma_.status_king','rohit-sharma-status-king','rohitstatusking'),
+                ('hitman_cha_diwana___45','hitman-cha-diwana-45','hitmandiwana45'),
+                ('rishabh_dines17','rishabh-dines17','rishabhdines17'),
+                ('csk_marathi_status_2.0','csk-marathi-status-2-0','cskmarathi20'),
+                ('virat.kohli.marathi.status','virat-kohli-marathi-status','viratkohlitheme'),
+                ('mahi.lifetime','mahi-lifetime','mahilifetime')
+                ON CONFLICT DO NOTHING
                 """
             )
 
@@ -651,16 +831,54 @@ def support_menu():
 def admin_menu():
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("📈 Instagram Campaign Tracker", callback_data="campaign_home")],
             [
                 InlineKeyboardButton("👥 Affiliates", callback_data="admin_agents"),
                 InlineKeyboardButton("➕ Add Affiliate", callback_data="admin_add"),
             ],
             [
-                InlineKeyboardButton("📊 Overall Report", callback_data="admin_report"),
+                InlineKeyboardButton("📊 Affiliate Report", callback_data="admin_report"),
                 InlineKeyboardButton("🔎 Search Affiliate", callback_data="admin_search"),
             ],
-            [InlineKeyboardButton("📥 Export CSV", callback_data="admin_export")],
+            [InlineKeyboardButton("📥 Export Affiliate CSV", callback_data="admin_export")],
             [InlineKeyboardButton("🏠 Public Menu", callback_data="home")],
+        ]
+    )
+
+
+def campaign_menu():
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("📊 Full Report", callback_data="campaign_report"),
+                InlineKeyboardButton("📅 Today", callback_data="campaign_today"),
+            ],
+            [
+                InlineKeyboardButton("🏆 Top Pages", callback_data="campaign_top"),
+                InlineKeyboardButton("🔄 Refresh", callback_data="campaign_home"),
+            ],
+            [
+                InlineKeyboardButton("🔗 Creator Links", callback_data="campaign_links"),
+                InlineKeyboardButton("➕ Add 1 Page", callback_data="campaign_add_single"),
+            ],
+            [
+                InlineKeyboardButton("📚 Bulk Create Links", callback_data="campaign_add_bulk"),
+                InlineKeyboardButton("📥 Export CSV", callback_data="campaign_export"),
+            ],
+            [
+                InlineKeyboardButton("🎨 Landing Design Manager", callback_data="theme_home"),
+            ],
+            [InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_home")],
+        ]
+    )
+
+
+def campaign_creator_menu(code):
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"campaign_creator:{code}")],
+            [InlineKeyboardButton("⬅️ Creator Links", callback_data="campaign_links")],
+            [InlineKeyboardButton("🏠 Campaign Tracker", callback_data="campaign_home")],
         ]
     )
 
@@ -999,6 +1217,1062 @@ async def create_instagram_affiliates(
     )
 
 
+
+# ============================================================
+# INSTAGRAM LINK TRACKER
+# ============================================================
+
+def list_campaign_links(limit=500):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM campaign_links WHERE is_active=TRUE ORDER BY created_at DESC, id DESC LIMIT %s",
+                (limit,),
+            )
+            return cur.fetchall()
+
+
+def campaign_link_by_slug(slug):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM campaign_links WHERE LOWER(slug)=LOWER(%s) AND is_active=TRUE LIMIT 1",
+                (slug,),
+            )
+            return cur.fetchone()
+
+
+def campaign_link_by_code(code):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM campaign_links WHERE LOWER(agent_code)=LOWER(%s) LIMIT 1",
+                (code,),
+            )
+            return cur.fetchone()
+
+
+def slugify_instagram(username):
+    username = username.strip().lstrip("@").lower()
+    return re.sub(r"[^a-z0-9]+", "-", username).strip("-") or "creator"
+
+
+def codeify_instagram(username):
+    username = username.strip().lstrip("@").lower()
+    return (re.sub(r"[^a-z0-9]+", "", username)[:28] or "creator")
+
+
+def ensure_unique_slug_and_code(username):
+    base_slug = slugify_instagram(username)
+    base_code = codeify_instagram(username)
+    slug, agent_code = base_slug, base_code
+    n = 2
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            while True:
+                cur.execute("SELECT 1 FROM campaign_links WHERE LOWER(slug)=LOWER(%s) LIMIT 1", (slug,))
+                slug_exists = cur.fetchone() is not None
+                cur.execute("SELECT 1 FROM agents WHERE LOWER(code)=LOWER(%s) LIMIT 1", (agent_code,))
+                code_exists = cur.fetchone() is not None
+                cur.execute("SELECT 1 FROM campaign_links WHERE LOWER(agent_code)=LOWER(%s) LIMIT 1", (agent_code,))
+                campaign_code_exists = cur.fetchone() is not None
+                if not slug_exists and not code_exists and not campaign_code_exists:
+                    return slug, agent_code
+                slug = f"{base_slug}-{n}"
+                suffix = str(n)
+                agent_code = base_code[:max(1, 28-len(suffix))] + suffix
+                n += 1
+
+
+def create_campaign_creator(username, commission_rate=0):
+    username = username.strip().lstrip("@")
+    if not username:
+        raise ValueError("Instagram username is empty")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM campaign_links WHERE LOWER(instagram_username)=LOWER(%s) LIMIT 1",
+                (username,),
+            )
+            existing = cur.fetchone()
+            if existing:
+                return existing, False
+    slug, agent_code = ensure_unique_slug_and_code(username)
+    create_agent(username, agent_code, commission_rate)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO campaign_links (instagram_username, slug, agent_code, is_active)
+                VALUES (%s, %s, %s, TRUE)
+                RETURNING *
+                """,
+                (username, slug, agent_code),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return row, True
+
+
+def creator_urls(row):
+    landing = f"{PUBLIC_BASE_URL}/{row['slug']}"
+    telegram = f"https://t.me/{BOT_USERNAME}?start=agent_{row['agent_code']}"
+    return landing, telegram
+
+
+def _client_ip():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or ""
+
+
+def record_landing_click(slug):
+    link = campaign_link_by_slug(slug)
+    if not link:
+        return False
+    code = link["agent_code"]
+
+    ip = _client_ip()
+    ua = request.headers.get("User-Agent", "")[:500]
+    referer = request.headers.get("Referer", "")[:1000]
+    fingerprint = hashlib.sha256(f"{ip}|{ua}".encode()).hexdigest()[:32]
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # Ignore obvious reload/duplicate hits from the same device for 30 seconds.
+            cur.execute(
+                """
+                SELECT 1
+                FROM landing_clicks
+                WHERE slug=%s
+                  AND ip_hash=%s
+                  AND clicked_at >= NOW() - INTERVAL '30 seconds'
+                LIMIT 1
+                """,
+                (slug, fingerprint),
+            )
+            if cur.fetchone():
+                return True
+
+            cur.execute(
+                """
+                INSERT INTO landing_clicks
+                    (slug, agent_code, ip_hash, user_agent, referer)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (slug, code, fingerprint, ua, referer),
+            )
+        conn.commit()
+    return True
+
+
+def _period_sql(period):
+    if period == "today":
+        return "AND created_at >= DATE_TRUNC('day', NOW())"
+    if period == "7d":
+        return "AND created_at >= NOW() - INTERVAL '7 days'"
+    if period == "30d":
+        return "AND created_at >= NOW() - INTERVAL '30 days'"
+    return ""
+
+
+def instagram_tracker_stats(code=None, period="all"):
+    period_filter = _period_sql(period)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            where = ""
+            params = []
+            if code:
+                where = "WHERE LOWER(a.code)=LOWER(%s)"
+                params = [code]
+
+            cur.execute(
+                f"""
+                WITH visits AS (
+                    SELECT
+                        agent_code,
+                        COUNT(*) AS landing_visits,
+                        COUNT(DISTINCT visitor_hash) FILTER (WHERE visitor_hash IS NOT NULL) AS unique_visitors
+                    FROM landing_events
+                    WHERE 1=1 {period_filter}
+                    GROUP BY agent_code
+                ),
+                outbound AS (
+                    SELECT
+                        agent_code,
+                        COUNT(*) FILTER (WHERE destination='telegram') AS telegram_clicks,
+                        COUNT(*) FILTER (WHERE destination='website') AS website_clicks
+                    FROM outbound_events
+                    WHERE 1=1 {period_filter}
+                    GROUP BY agent_code
+                ),
+                starts AS (
+                    SELECT
+                        a2.code AS agent_code,
+                        COUNT(*) AS telegram_starts
+                    FROM referrals r
+                    JOIN agents a2 ON a2.id=r.agent_id
+                    WHERE r.agent_id IS NOT NULL
+                    {"AND r.joined_at >= DATE_TRUNC('day', NOW())" if period == "today" else ""}
+                    {"AND r.joined_at >= NOW() - INTERVAL '7 days'" if period == "7d" else ""}
+                    {"AND r.joined_at >= NOW() - INTERVAL '30 days'" if period == "30d" else ""}
+                    GROUP BY a2.code
+                ),
+                conv AS (
+                    SELECT
+                        agent_code,
+                        COUNT(*) FILTER (WHERE event_type='registration') AS registrations,
+                        COUNT(*) FILTER (WHERE event_type='deposit') AS deposits,
+                        COALESCE(SUM(amount) FILTER (WHERE event_type='deposit'), 0) AS deposit_amount
+                    FROM conversion_events
+                    WHERE 1=1 {period_filter}
+                    GROUP BY agent_code
+                )
+                SELECT
+                    a.code,
+                    a.name,
+                    COALESCE(v.landing_visits, 0) AS landing_visits,
+                    COALESCE(v.unique_visitors, 0) AS unique_visitors,
+                    COALESCE(o.telegram_clicks, 0) AS telegram_clicks,
+                    COALESCE(o.website_clicks, 0) AS website_clicks,
+                    COALESCE(s.telegram_starts, 0) AS telegram_starts,
+                    COALESCE(c.registrations, 0) AS registrations,
+                    COALESCE(c.deposits, 0) AS deposits,
+                    COALESCE(c.deposit_amount, 0) AS deposit_amount
+                FROM agents a
+                LEFT JOIN visits v ON LOWER(v.agent_code)=LOWER(a.code)
+                LEFT JOIN outbound o ON LOWER(o.agent_code)=LOWER(a.code)
+                LEFT JOIN starts s ON LOWER(s.agent_code)=LOWER(a.code)
+                LEFT JOIN conv c ON LOWER(c.agent_code)=LOWER(a.code)
+                {where}
+                ORDER BY landing_visits DESC, telegram_clicks DESC, website_clicks DESC, a.name
+                """,
+                params,
+            )
+            return cur.fetchall()
+
+
+def tracker_today_totals():
+    rows = instagram_tracker_stats(period="today")
+    return {
+        "landing_visits": sum(int(r["landing_visits"] or 0) for r in rows),
+        "unique_visitors": sum(int(r["unique_visitors"] or 0) for r in rows),
+        "telegram_clicks": sum(int(r["telegram_clicks"] or 0) for r in rows),
+        "website_clicks": sum(int(r["website_clicks"] or 0) for r in rows),
+        "starts": sum(int(r["telegram_starts"] or 0) for r in rows),
+        "registrations": sum(int(r["registrations"] or 0) for r in rows),
+        "deposits": sum(int(r["deposits"] or 0) for r in rows),
+        "deposit_amount": sum(float(r["deposit_amount"] or 0) for r in rows),
+    }
+
+
+def _visitor_fingerprint():
+    ip = _client_ip()
+    ua = request.headers.get("User-Agent", "")[:500]
+    raw = f"{ip}|{ua}".encode("utf-8", "ignore")
+    return hashlib.sha256(raw).hexdigest(), ua
+
+
+def record_landing_visit(slug):
+    link = campaign_link_by_slug(slug)
+    if not link:
+        return False
+    fingerprint, ua = _visitor_fingerprint()
+    referer = request.headers.get("Referer", "")[:1000]
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1 FROM landing_events
+                WHERE slug=%s AND visitor_hash=%s
+                  AND created_at >= NOW() - INTERVAL '30 minutes'
+                LIMIT 1
+                """,
+                (slug, fingerprint),
+            )
+            if not cur.fetchone():
+                cur.execute(
+                    """
+                    INSERT INTO landing_events
+                        (slug, agent_code, visitor_hash, user_agent, referer)
+                    VALUES (%s,%s,%s,%s,%s)
+                    """,
+                    (slug, link["agent_code"], fingerprint, ua, referer),
+                )
+        conn.commit()
+    return True
+
+
+def record_outbound_click(slug, destination):
+    link = campaign_link_by_slug(slug)
+    if not link or destination not in {"telegram", "website"}:
+        return False
+    fingerprint, _ = _visitor_fingerprint()
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1 FROM outbound_events
+                WHERE slug=%s AND visitor_hash=%s AND destination=%s
+                  AND created_at >= NOW() - INTERVAL '5 seconds'
+                LIMIT 1
+                """,
+                (slug, fingerprint, destination),
+            )
+            if not cur.fetchone():
+                cur.execute(
+                    """
+                    INSERT INTO outbound_events
+                        (slug, agent_code, destination, visitor_hash)
+                    VALUES (%s,%s,%s,%s)
+                    """,
+                    (slug, link["agent_code"], destination, fingerprint),
+                )
+        conn.commit()
+    return True
+
+
+async def igstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return
+
+    if context.args:
+        code_or_slug = context.args[0].strip().lower().lstrip("@")
+        campaign = campaign_link_by_slug(code_or_slug)
+        code = campaign["agent_code"] if campaign else code_or_slug
+        # Also allow Instagram username
+        for name, c in INSTAGRAM_AFFILIATES:
+            if name.lower() == code_or_slug:
+                code = c
+                break
+        rows = instagram_tracker_stats(code)
+        if not rows:
+            await update.message.reply_text("❌ Creator / agent not found.")
+            return
+        r = rows[0]
+        clicks = int(r["landing_visits"] or 0)
+        starts = int(r["telegram_starts"] or 0)
+        rate = (starts / clicks * 100) if clicks else 0
+        await update.message.reply_text(
+            "📊 <b>Instagram Link Tracker</b>\n\n"
+            f"Page: <b>@{r['name']}</b>\n"
+            f"Code: <code>{r['code']}</code>\n"
+            f"Landing clicks: <b>{clicks}</b>\n"
+            f"Telegram starts: <b>{starts}</b>\n"
+            f"Click → Telegram: <b>{rate:.1f}%</b>\n"
+            f"Registrations: <b>{int(r['registrations'] or 0)}</b>\n"
+            f"Deposits: <b>{int(r['deposits'] or 0)}</b>\n"
+            f"Deposit amount: <b>{r['deposit_amount'] or 0}</b>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    rows = instagram_tracker_stats()
+    total_clicks = sum(int(r["landing_visits"] or 0) for r in rows)
+    total_starts = sum(int(r["telegram_starts"] or 0) for r in rows)
+    total_regs = sum(int(r["registrations"] or 0) for r in rows)
+    total_deps = sum(int(r["deposits"] or 0) for r in rows)
+
+    lines = [
+        "📊 <b>27-Link Instagram Tracker</b>",
+        "",
+        f"Landing clicks: <b>{total_clicks}</b>",
+        f"Telegram starts: <b>{total_starts}</b>",
+        f"Registrations: <b>{total_regs}</b>",
+        f"Deposits: <b>{total_deps}</b>",
+        "",
+        "<b>Top pages</b>",
+    ]
+    for r in rows[:15]:
+        clicks = int(r["landing_visits"] or 0)
+        starts = int(r["telegram_starts"] or 0)
+        lines.append(f"@{r['name']}: {clicks} clicks • {starts} TG")
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def igtoday_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return
+    s = tracker_today_totals()
+    await update.message.reply_text(
+        "📅 <b>Instagram Tracker — Today</b>\n\n"
+        f"Landing clicks: <b>{s['clicks']}</b>\n"
+        f"Telegram starts: <b>{s['starts']}</b>\n"
+        f"Registrations: <b>{s['registrations']}</b>\n"
+        f"Deposits: <b>{s['deposits']}</b>\n"
+        f"Deposit amount: <b>{s['deposit_amount']}</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+
+ALLOWED_THEME_EXTENSIONS = {
+    ".html", ".htm", ".css", ".js", ".json", ".txt",
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".ico",
+    ".woff", ".woff2", ".ttf", ".otf", ".mp4", ".webm"
+}
+
+
+def active_theme():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM landing_themes WHERE is_active=TRUE ORDER BY id DESC LIMIT 1")
+            return cur.fetchone()
+
+
+def get_theme(theme_id):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM landing_themes WHERE id=%s LIMIT 1", (theme_id,))
+            return cur.fetchone()
+
+
+def recent_themes(limit=8):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM landing_themes ORDER BY id DESC LIMIT %s", (limit,))
+            return cur.fetchall()
+
+
+def save_theme_zip(zip_bytes, filename, created_by):
+    if len(zip_bytes) > THEME_UPLOAD_MAX_MB * 1024 * 1024:
+        raise ValueError(f"ZIP is larger than {THEME_UPLOAD_MAX_MB} MB")
+
+    zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    members = [m for m in zf.infolist() if not m.is_dir()]
+    if len(members) > 200:
+        raise ValueError("Theme has too many files (max 200)")
+
+    safe_files = {}
+    index_name = None
+    for info in members:
+        name = info.filename.replace("\\", "/").lstrip("/")
+        if ".." in name.split("/"):
+            raise ValueError("Unsafe path in ZIP")
+        ext = Path(name).suffix.lower()
+        if ext not in ALLOWED_THEME_EXTENSIONS:
+            continue
+        data = zf.read(info)
+        if len(data) > 8 * 1024 * 1024:
+            raise ValueError(f"Asset too large: {name}")
+        safe_files[name] = data
+        if name.lower() == "index.html" or name.lower().endswith("/index.html"):
+            if index_name is None or name.count("/") < index_name.count("/"):
+                index_name = name
+
+    if not index_name:
+        raise ValueError("ZIP must contain index.html")
+
+    root_prefix = index_name[:-len("index.html")]
+    normalized = {}
+    for name, data in safe_files.items():
+        if root_prefix and name.startswith(root_prefix):
+            rel = name[len(root_prefix):]
+        else:
+            rel = name
+        if rel:
+            normalized[rel] = data
+
+    index_bytes = normalized.pop("index.html", None)
+    if index_bytes is None:
+        index_bytes = safe_files[index_name]
+    index_html = index_bytes.decode("utf-8", "replace")
+    theme_name = Path(filename).stem[:100] or "Landing Theme"
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO landing_themes (name, index_html, created_by)
+                VALUES (%s,%s,%s)
+                RETURNING *
+                """,
+                (theme_name, index_html, created_by),
+            )
+            theme = cur.fetchone()
+            for path, content in normalized.items():
+                mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+                cur.execute(
+                    """
+                    INSERT INTO landing_theme_assets (theme_id, path, mime_type, content)
+                    VALUES (%s,%s,%s,%s)
+                    ON CONFLICT (theme_id, path)
+                    DO UPDATE SET mime_type=EXCLUDED.mime_type, content=EXCLUDED.content
+                    """,
+                    (theme["id"], path, mime, content),
+                )
+        conn.commit()
+    return theme
+
+
+def publish_theme(theme_id):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM landing_themes WHERE id=%s", (theme_id,))
+            if not cur.fetchone():
+                return False
+            cur.execute("UPDATE landing_themes SET is_active=FALSE WHERE is_active=TRUE")
+            cur.execute(
+                "UPDATE landing_themes SET is_active=TRUE, published_at=NOW() WHERE id=%s",
+                (theme_id,),
+            )
+            cur.execute(
+                "INSERT INTO theme_publish_history (theme_id) VALUES (%s)",
+                (theme_id,),
+            )
+        conn.commit()
+    return True
+
+
+def rollback_theme():
+    current = active_theme()
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            if current:
+                cur.execute(
+                    """
+                    SELECT h.theme_id
+                    FROM theme_publish_history h
+                    WHERE h.theme_id <> %s
+                    ORDER BY h.id DESC
+                    LIMIT 1
+                    """,
+                    (current["id"],),
+                )
+            else:
+                cur.execute(
+                    "SELECT theme_id FROM theme_publish_history ORDER BY id DESC LIMIT 1"
+                )
+            row = cur.fetchone()
+    if not row:
+        return None
+    publish_theme(row["theme_id"])
+    return get_theme(row["theme_id"])
+
+
+def inject_theme(theme, link, preview=False):
+    slug = link["slug"]
+    instagram = link["instagram_username"]
+    telegram_url = f"{PUBLIC_BASE_URL}/go/{slug}/telegram"
+    website_url = f"{PUBLIC_BASE_URL}/go/{slug}/website"
+
+    raw = theme["index_html"] if theme else DEFAULT_LANDING_HTML
+    replacements = {
+        "{{INSTAGRAM_PAGE}}": html.escape("@" + instagram),
+        "{{LANDING_SLUG}}": html.escape(slug),
+        "{{TELEGRAM_URL}}": telegram_url,
+        "{{WEBSITE_URL}}": website_url,
+        "{{BETROXY_WEB_URL}}": BETROXY_WEB_URL,
+        "{{BETROXY_BOT_URL}}": BETROXY_BOT_URL,
+    }
+    for k, v in replacements.items():
+        raw = raw.replace(k, v)
+
+    if theme:
+        base_tag = f'<base href="{PUBLIC_BASE_URL}/theme-assets/{theme["id"]}/">'
+        if "<head" in raw.lower():
+            raw = re.sub(r"(<head[^>]*>)", r"\1" + base_tag, raw, count=1, flags=re.I)
+        else:
+            raw = base_tag + raw
+
+    # Gives uploaded designs a code-free way to mark buttons.
+    helper = f"""
+<script>
+(function() {{
+  const tg = {telegram_url!r};
+  const web = {website_url!r};
+  document.querySelectorAll('[data-betroxy="telegram"],[data-track="telegram"]').forEach(el => {{
+    if (el.tagName === 'A') el.href = tg;
+    else el.addEventListener('click', () => location.href = tg);
+  }});
+  document.querySelectorAll('[data-betroxy="website"],[data-track="website"]').forEach(el => {{
+    if (el.tagName === 'A') el.href = web;
+    else el.addEventListener('click', () => location.href = web);
+  }});
+}})();
+</script>
+"""
+    if "</body>" in raw.lower():
+        pos = raw.lower().rfind("</body>")
+        raw = raw[:pos] + helper + raw[pos:]
+    else:
+        raw += helper
+    return raw
+
+
+DEFAULT_LANDING_HTML = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BETROXY</title>
+<style>
+body{margin:0;background:#07110d;color:#fff;font-family:Arial,sans-serif;min-height:100vh;display:grid;place-items:center}
+.card{width:min(92vw,520px);padding:34px;border:1px solid #1f5c3e;border-radius:24px;background:#0a1812;box-shadow:0 20px 70px #0008;text-align:center}
+.logo{font-size:38px;font-weight:900;letter-spacing:2px}.tag{opacity:.75;margin:8px 0 30px}
+.btn{display:block;text-decoration:none;padding:17px 20px;margin:14px 0;border-radius:14px;font-weight:800}
+.tg{background:#21c77a;color:#04100a}.web{background:#fff;color:#07110d}.small{opacity:.55;font-size:12px;margin-top:25px}
+</style>
+</head>
+<body>
+<div class="card">
+<div class="logo">BETROXY</div>
+<div class="tag">Play Beyond Limits</div>
+<a class="btn tg" href="{{TELEGRAM_URL}}">OPEN BETROXY BOT</a>
+<a class="btn web" href="{{WEBSITE_URL}}">VISIT BETROXY.COM</a>
+<div class="small">18+ • Play Responsibly</div>
+</div>
+</body></html>"""
+
+
+def sample_creator_for_preview():
+    links = list_campaign_links(limit=1)
+    return links[0] if links else None
+
+
+
+tracker_api = Flask("betroxy_tracker_api")
+
+
+@tracker_api.get("/health")
+def tracker_health():
+    return jsonify({"ok": True, "service": "betroxy-instagram-tracker"})
+
+
+@tracker_api.get("/")
+def landing_root():
+    return Response(
+        "<h2>BETROXY Campaign Platform</h2><p>Use a creator landing URL.</p>",
+        mimetype="text/html",
+    )
+
+
+@tracker_api.get("/theme-assets/<int:theme_id>/<path:asset_path>")
+def theme_asset(theme_id, asset_path):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mime_type, content
+                FROM landing_theme_assets
+                WHERE theme_id=%s AND path=%s
+                LIMIT 1
+                """,
+                (theme_id, asset_path),
+            )
+            row = cur.fetchone()
+    if not row:
+        return Response("Not found", status=404)
+    return Response(bytes(row["content"]), mimetype=row["mime_type"])
+
+
+@tracker_api.get("/preview/<int:theme_id>/<slug>")
+def preview_theme(theme_id, slug):
+    if TRACKER_API_SECRET:
+        key = request.args.get("key", "")
+        if not secrets.compare_digest(key, TRACKER_API_SECRET):
+            return Response("Unauthorized", status=401)
+    theme = get_theme(theme_id)
+    link = campaign_link_by_slug(slug)
+    if not theme or not link:
+        return Response("Not found", status=404)
+    return Response(inject_theme(theme, link, preview=True), mimetype="text/html")
+
+
+@tracker_api.get("/go/<slug>/<destination>")
+def outbound_redirect(slug, destination):
+    slug = slug.strip().lower()
+    destination = destination.strip().lower()
+    link = campaign_link_by_slug(slug)
+    if not link or destination not in {"telegram", "website"}:
+        return Response("Not found", status=404)
+
+    record_outbound_click(slug, destination)
+
+    if destination == "telegram":
+        return redirect(BETROXY_BOT_URL, code=302)
+
+    params = {
+        "utm_source": "instagram",
+        "utm_medium": "creator_landing",
+        "utm_campaign": "batraxy",
+        "utm_content": slug,
+    }
+    separator = "&" if "?" in BETROXY_WEB_URL else "?"
+    return redirect(BETROXY_WEB_URL + separator + urlencode(params), code=302)
+
+
+@tracker_api.get("/<slug>")
+def dynamic_creator_landing(slug):
+    slug = slug.strip().lower()
+    link = campaign_link_by_slug(slug)
+    if not link:
+        return Response("Landing page not found", status=404)
+    record_landing_visit(slug)
+    return Response(inject_theme(active_theme(), link), mimetype="text/html")
+
+
+@tracker_api.route("/track/click/<slug>", methods=["GET", "POST", "OPTIONS"])
+def tracker_click(slug):
+    if request.method == "OPTIONS":
+        resp = jsonify({"ok": True})
+    else:
+        ok = record_landing_click(slug.strip().lower())
+        if not ok:
+            return jsonify({"ok": False, "error": "unknown_slug"}), 404
+        resp = jsonify({"ok": True})
+
+    # Allows a landing page on batraxy.com to POST via fetch().
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return resp
+
+
+@tracker_api.post("/track/event")
+def tracker_event():
+    if not TRACKER_API_SECRET:
+        return jsonify({"ok": False, "error": "TRACKER_API_SECRET not configured"}), 503
+
+    supplied = request.headers.get("X-Tracker-Secret", "")
+    if not secrets.compare_digest(supplied, TRACKER_API_SECRET):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    code = (data.get("agent_code") or "").strip().lower()
+    event_type = (data.get("event_type") or "").strip().lower()
+    external_user_id = str(data.get("external_user_id") or "")[:200]
+    amount = data.get("amount") or 0
+
+    if not find_agent_by_code(code):
+        return jsonify({"ok": False, "error": "unknown_agent"}), 404
+    if event_type not in {"registration", "deposit"}:
+        return jsonify({"ok": False, "error": "invalid_event_type"}), 400
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO conversion_events
+                    (agent_code, event_type, external_user_id, amount)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (code, event_type, external_user_id, amount),
+            )
+        conn.commit()
+
+    return jsonify({"ok": True})
+
+
+def run_tracker_api():
+    tracker_api.run(host="0.0.0.0", port=PORT, threaded=True, use_reloader=False)
+
+
+
+
+def campaign_overview_text():
+    rows = instagram_tracker_stats()
+    links = list_campaign_links()
+    visits = sum(int(r["landing_visits"] or 0) for r in rows)
+    uniques = sum(int(r["unique_visitors"] or 0) for r in rows)
+    tg = sum(int(r["telegram_clicks"] or 0) for r in rows)
+    web = sum(int(r["website_clicks"] or 0) for r in rows)
+    regs = sum(int(r["registrations"] or 0) for r in rows)
+    deps = sum(int(r["deposits"] or 0) for r in rows)
+    amount = sum(float(r["deposit_amount"] or 0) for r in rows)
+    return (
+        "📈 <b>BETROXY Instagram Control Center</b>\n\n"
+        f"🔗 Active landing pages: <b>{len(links)}</b>\n"
+        f"👁 Landing visits: <b>{visits}</b>\n"
+        f"👤 Unique visitors: <b>{uniques}</b>\n"
+        f"✈️ BetroxyBot clicks: <b>{tg}</b> "
+        f"(<b>{(tg/visits*100 if visits else 0):.1f}%</b>)\n"
+        f"🌐 Betroxy.com clicks: <b>{web}</b> "
+        f"(<b>{(web/visits*100 if visits else 0):.1f}%</b>)\n"
+        f"📝 Registrations: <b>{regs}</b>\n"
+        f"💳 Deposits: <b>{deps}</b>\n"
+        f"💰 Deposit amount: <b>{amount:,.2f}</b>\n\n"
+        "Everything below is button-controlled. No report commands are required."
+    )
+
+
+def campaign_rows_by_code():
+    return {r["code"].lower(): r for r in instagram_tracker_stats()}
+
+
+def creator_report_text(code):
+    rows = instagram_tracker_stats(code)
+    if not rows:
+        return "❌ No statistics found."
+    r = rows[0]
+    campaign = campaign_link_by_code(code)
+    visits = int(r["landing_visits"] or 0)
+    tg = int(r["telegram_clicks"] or 0)
+    web = int(r["website_clicks"] or 0)
+    starts = int(r["telegram_starts"] or 0)
+    regs = int(r["registrations"] or 0)
+    deps = int(r["deposits"] or 0)
+    text = (
+        f"📊 <b>@{r['name']}</b>\n\n"
+        f"Agent code: <code>{r['code']}</code>\n"
+        f"👁 Landing visits: <b>{visits}</b>\n"
+        f"👤 Unique visitors: <b>{int(r['unique_visitors'] or 0)}</b>\n"
+        f"✈️ BetroxyBot clicks: <b>{tg}</b> ({(tg/visits*100 if visits else 0):.1f}%)\n"
+        f"🌐 Betroxy.com clicks: <b>{web}</b> ({(web/visits*100 if visits else 0):.1f}%)\n"
+        f"🚀 Bot starts captured: <b>{starts}</b>\n"
+        f"📝 Registrations: <b>{regs}</b>\n"
+        f"💳 Deposits: <b>{deps}</b>\n"
+        f"💰 Deposit amount: <b>{float(r['deposit_amount'] or 0):,.2f}</b>"
+    )
+    if campaign:
+        landing, _ = creator_urls(campaign)
+        text += (
+            f"\n\n🌐 Landing:\n<code>{landing}</code>"
+            f"\n\n✈️ Telegram destination:\n<code>{BETROXY_BOT_URL}</code>"
+            f"\n\n🌍 Website destination:\n<code>{BETROXY_WEB_URL}</code>"
+        )
+    return text
+
+
+def campaign_links_keyboard(page=0, per_page=8):
+    links = list_campaign_links()
+    total_pages = max(1, (len(links)+per_page-1)//per_page)
+    page = max(0, min(page, total_pages-1))
+    subset = links[page*per_page:(page+1)*per_page]
+    rows = []
+    for item in subset:
+        rows.append([InlineKeyboardButton(f"@{item['instagram_username']}", callback_data=f"campaign_creator:{item['agent_code']}")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"campaign_links_page:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="campaign_noop"))
+    if page < total_pages-1:
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"campaign_links_page:{page+1}"))
+    rows.append(nav)
+    rows.append([InlineKeyboardButton("🏠 Campaign Tracker", callback_data="campaign_home")])
+    return InlineKeyboardMarkup(rows), page, total_pages
+
+
+def make_campaign_csv():
+    links = list_campaign_links()
+    stat_map = campaign_rows_by_code()
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([
+        "Instagram Page","Landing Link","Agent Code",
+        "Landing Visits","Unique Visitors","BetroxyBot Clicks","Betroxy.com Clicks",
+        "Telegram CTR %","Website CTR %","Bot Starts","Registrations","Deposits","Deposit Amount"
+    ])
+    for item in links:
+        r = stat_map.get(item["agent_code"].lower(), {})
+        landing, _ = creator_urls(item)
+        visits = int(r.get("landing_visits") or 0)
+        tg = int(r.get("telegram_clicks") or 0)
+        web = int(r.get("website_clicks") or 0)
+        w.writerow([
+            f"@{item['instagram_username']}", landing, item["agent_code"],
+            visits, int(r.get("unique_visitors") or 0), tg, web,
+            round(tg/visits*100, 2) if visits else 0,
+            round(web/visits*100, 2) if visits else 0,
+            int(r.get("telegram_starts") or 0),
+            int(r.get("registrations") or 0), int(r.get("deposits") or 0),
+            r.get("deposit_amount") or 0
+        ])
+    return out.getvalue()
+
+
+async def campaign_add_single_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin access required.")
+        return ConversationHandler.END
+    await q.message.reply_text(
+        "➕ <b>Create Creator Link</b>\n\nSend Instagram username, e.g. <code>new_cricket_page</code>.",
+        parse_mode=ParseMode.HTML,
+    )
+    return CAMPAIGN_ADD_SINGLE
+
+
+async def campaign_add_single_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return ConversationHandler.END
+    username = (update.message.text or "").strip().lstrip("@")
+    try:
+        row, created = create_campaign_creator(username)
+        landing, telegram = creator_urls(row)
+        await update.message.reply_text(
+            ("✅ Created" if created else "ℹ️ Already existed") +
+            f"\n\nInstagram: <b>@{row['instagram_username']}</b>"
+            f"\nLanding:\n<code>{landing}</code>"
+            f"\n\nTelegram:\n<code>{telegram}</code>"
+            f"\n\nAgent code: <code>{row['agent_code']}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        logger.exception("Single creator creation failed")
+        await update.message.reply_text(f"❌ Could not create: {e}", reply_markup=campaign_menu())
+    return ConversationHandler.END
+
+
+async def campaign_add_bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin access required.")
+        return ConversationHandler.END
+    await q.message.reply_text(
+        "📚 <b>Bulk Create Links</b>\n\nPaste Instagram usernames, one per line. Up to 100 at once.",
+        parse_mode=ParseMode.HTML,
+    )
+    return CAMPAIGN_ADD_BULK
+
+
+async def campaign_add_bulk_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return ConversationHandler.END
+    raw = update.message.text or ""
+    names, seen = [], set()
+    for line in raw.splitlines():
+        item = line.strip().lstrip("@").split(",")[0].strip()
+        if item and item.lower() not in seen:
+            seen.add(item.lower())
+            names.append(item)
+    names = names[:100]
+    created_rows, existing_rows, failed = [], [], []
+    for username in names:
+        try:
+            row, created = create_campaign_creator(username)
+            (created_rows if created else existing_rows).append(row)
+        except Exception as e:
+            failed.append((username, str(e)))
+    lines = [
+        "✅ <b>Bulk Generation Complete</b>",
+        "",
+        f"Created: <b>{len(created_rows)}</b>",
+        f"Already existed: <b>{len(existing_rows)}</b>",
+        f"Failed: <b>{len(failed)}</b>",
+    ]
+    for row in created_rows[:15]:
+        landing, _ = creator_urls(row)
+        lines.append(f"\n@{row['instagram_username']}\n<code>{landing}</code>")
+    if len(created_rows) > 15:
+        lines.append(f"\n…and {len(created_rows)-15} more. Use Export CSV for all.")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=campaign_menu(), disable_web_page_preview=True)
+    return ConversationHandler.END
+
+
+async def campaign_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text("Cancelled.", reply_markup=campaign_menu())
+    return ConversationHandler.END
+
+
+
+
+def theme_menu():
+    active = active_theme()
+    rows = [
+        [InlineKeyboardButton("⬆️ Upload New Design ZIP", callback_data="theme_upload")],
+    ]
+    recent = recent_themes(6)
+    for t in recent:
+        marker = "✅" if t["is_active"] else "🎨"
+        rows.append([
+            InlineKeyboardButton(
+                f"{marker} #{t['id']} {t['name'][:28]}",
+                callback_data=f"theme_view:{t['id']}"
+            )
+        ])
+    rows.append([
+        InlineKeyboardButton("↩️ Roll Back Previous Design", callback_data="theme_rollback")
+    ])
+    rows.append([InlineKeyboardButton("⬅️ Campaign Tracker", callback_data="campaign_home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def theme_detail_menu(theme_id):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👁 Preview", callback_data=f"theme_preview:{theme_id}"),
+            InlineKeyboardButton("🚀 Publish", callback_data=f"theme_publish:{theme_id}"),
+        ],
+        [InlineKeyboardButton("⬅️ Design Manager", callback_data="theme_home")],
+    ])
+
+
+async def theme_upload_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin access required.")
+        return ConversationHandler.END
+    await q.message.reply_text(
+        "🎨 <b>Upload New Landing Design</b>\n\n"
+        "Send a ZIP containing <code>index.html</code> and any CSS/JS/images.\n\n"
+        "For tracked buttons, use either:\n"
+        '<code>href="{{TELEGRAM_URL}}"</code> / <code>href="{{WEBSITE_URL}}"</code>\n'
+        "or add <code>data-betroxy=\"telegram\"</code> / <code>data-betroxy=\"website\"</code>.\n\n"
+        "The upload is saved as a DRAFT first. You can preview it before publishing.",
+        parse_mode=ParseMode.HTML,
+    )
+    return THEME_UPLOAD
+
+
+async def theme_upload_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return ConversationHandler.END
+    doc = update.message.document
+    if not doc:
+        await update.message.reply_text("❌ Please send the theme as a ZIP file.")
+        return THEME_UPLOAD
+    filename = doc.file_name or "theme.zip"
+    if not filename.lower().endswith(".zip"):
+        await update.message.reply_text("❌ File must be a .zip.")
+        return THEME_UPLOAD
+    if doc.file_size and doc.file_size > THEME_UPLOAD_MAX_MB * 1024 * 1024:
+        await update.message.reply_text(f"❌ ZIP is larger than {THEME_UPLOAD_MAX_MB} MB.")
+        return ConversationHandler.END
+
+    try:
+        tg_file = await context.bot.get_file(doc.file_id)
+        data = bytes(await tg_file.download_as_bytearray())
+        theme = save_theme_zip(data, filename, update.effective_user.id)
+        sample = sample_creator_for_preview()
+        preview = "No creator page exists yet."
+        if sample:
+            key = f"?key={TRACKER_API_SECRET}" if TRACKER_API_SECRET else ""
+            preview = f"{PUBLIC_BASE_URL}/preview/{theme['id']}/{sample['slug']}{key}"
+        await update.message.reply_text(
+            "✅ <b>Design uploaded as DRAFT</b>\n\n"
+            f"Theme: <b>#{theme['id']} {html.escape(theme['name'])}</b>\n\n"
+            f"Preview:\n<code>{preview}</code>\n\n"
+            "Nothing live has changed yet. Tap Publish when ready.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=theme_detail_menu(theme["id"]),
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        logger.exception("Theme upload failed")
+        await update.message.reply_text(
+            f"❌ Theme upload failed:\n<code>{html.escape(str(e))}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=theme_menu(),
+        )
+    return ConversationHandler.END
+
+
+async def theme_upload_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text("Upload cancelled.", reply_markup=theme_menu())
+    return ConversationHandler.END
+
+
+
 # ============================================================
 # CALLBACKS
 # ============================================================
@@ -1074,9 +2348,143 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("❌ Admin access required.")
         return
 
+    if data == "theme_home":
+        active = active_theme()
+        active_text = f"#{active['id']} {active['name']}" if active else "Default built-in design"
+        await q.message.reply_text(
+            "🎨 <b>Landing Design Manager</b>\n\n"
+            f"Currently live: <b>{html.escape(active_text)}</b>\n\n"
+            "Upload, preview, publish or roll back designs directly from Telegram.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=theme_menu(),
+        )
+        return
+
+    if data.startswith("theme_view:"):
+        theme_id = int(data.split(":",1)[1])
+        t = get_theme(theme_id)
+        if not t:
+            await q.message.reply_text("❌ Theme not found.", reply_markup=theme_menu())
+            return
+        await q.message.reply_text(
+            f"🎨 <b>Theme #{t['id']}</b>\n"
+            f"Name: <b>{html.escape(t['name'])}</b>\n"
+            f"Status: <b>{'LIVE' if t['is_active'] else 'DRAFT / HISTORY'}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=theme_detail_menu(t["id"]),
+        )
+        return
+
+    if data.startswith("theme_preview:"):
+        theme_id = int(data.split(":",1)[1])
+        sample = sample_creator_for_preview()
+        if not sample:
+            await q.message.reply_text("Create at least one creator landing page first.")
+            return
+        key = f"?key={TRACKER_API_SECRET}" if TRACKER_API_SECRET else ""
+        url = f"{PUBLIC_BASE_URL}/preview/{theme_id}/{sample['slug']}{key}"
+        await q.message.reply_text(
+            f"👁 <b>Preview Theme #{theme_id}</b>\n\n<code>{url}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=theme_detail_menu(theme_id),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if data.startswith("theme_publish:"):
+        theme_id = int(data.split(":",1)[1])
+        if not publish_theme(theme_id):
+            await q.message.reply_text("❌ Theme not found.", reply_markup=theme_menu())
+            return
+        await q.message.reply_text(
+            f"🚀 <b>Theme #{theme_id} is now LIVE</b>\n\n"
+            "All creator landing pages use it immediately. No Railway redeploy is required.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=theme_menu(),
+        )
+        return
+
+    if data == "theme_rollback":
+        t = rollback_theme()
+        if not t:
+            await q.message.reply_text(
+                "No previous published design is available.",
+                reply_markup=theme_menu(),
+            )
+            return
+        await q.message.reply_text(
+            f"↩️ Rolled back successfully.\n\nNow live: <b>#{t['id']} {html.escape(t['name'])}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=theme_menu(),
+        )
+        return
+
+    if data == "campaign_noop":
+        return
+
+    if data == "campaign_home":
+        await q.message.reply_text(campaign_overview_text(), parse_mode=ParseMode.HTML, reply_markup=campaign_menu())
+        return
+
+    if data == "campaign_report":
+        rows = instagram_tracker_stats()
+        lines = ["📊 <b>Full Campaign Report</b>", ""]
+        for r in rows[:25]:
+            lines.append(f"@{r['name']}: <b>{int(r['landing_visits'] or 0)}</b> visits • {int(r['telegram_clicks'] or 0)} bot • {int(r['website_clicks'] or 0)} web • {int(r['deposits'] or 0)} dep")
+        if len(rows) > 25:
+            lines.append("\nUse Creator Links for all pages.")
+        await q.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=campaign_menu())
+        return
+
+    if data == "campaign_today":
+        s = tracker_today_totals()
+        await q.message.reply_text(
+            "📅 <b>Today's Campaign</b>\n\n"
+            f"👁 Landing visits: <b>{s['landing_visits']}</b>\n"
+            f"👤 Unique visitors: <b>{s['unique_visitors']}</b>\n"
+            f"✈️ BetroxyBot clicks: <b>{s['telegram_clicks']}</b>\n"
+            f"🌐 Betroxy.com clicks: <b>{s['website_clicks']}</b>\n"
+            f"🚀 Bot starts captured: <b>{s['starts']}</b>\n"
+            f"📝 Registrations: <b>{s['registrations']}</b>\n"
+            f"💳 Deposits: <b>{s['deposits']}</b>\n"
+            f"💰 Deposit amount: <b>{float(s['deposit_amount'] or 0):,.2f}</b>",
+            parse_mode=ParseMode.HTML, reply_markup=campaign_menu()
+        )
+        return
+
+    if data == "campaign_top":
+        rows = instagram_tracker_stats()
+        lines = ["🏆 <b>Top Performing Pages</b>", ""]
+        for i, r in enumerate(rows[:10], 1):
+            lines.append(f"{i}. @{r['name']} — <b>{int(r['landing_visits'] or 0)}</b> visits • {int(r['telegram_clicks'] or 0)} bot • {int(r['website_clicks'] or 0)} web")
+        await q.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=campaign_menu())
+        return
+
+    if data == "campaign_links":
+        kb, page, total_pages = campaign_links_keyboard(0)
+        await q.message.reply_text(f"🔗 <b>Creator Tracking Links</b>\n\nPage {page+1} of {total_pages}. Tap a creator.", parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if data.startswith("campaign_links_page:"):
+        page = int(data.split(":",1)[1])
+        kb, page, total_pages = campaign_links_keyboard(page)
+        await q.message.reply_text(f"🔗 <b>Creator Tracking Links</b>\n\nPage {page+1} of {total_pages}.", parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if data.startswith("campaign_creator:"):
+        c = data.split(":",1)[1]
+        await q.message.reply_text(creator_report_text(c), parse_mode=ParseMode.HTML, reply_markup=campaign_creator_menu(c), disable_web_page_preview=True)
+        return
+
+    if data == "campaign_export":
+        b = io.BytesIO(make_campaign_csv().encode("utf-8-sig"))
+        b.name = "BETROXY_Instagram_Campaign_Live_Report.csv"
+        await q.message.reply_document(document=b, caption="📥 Campaign report + creator links")
+        return
+
     if data == "admin_home":
         await q.message.reply_text(
-            "🛠 <b>Betroxy Affiliate Admin</b>",
+            "🛠 <b>Betroxy Admin Control Center</b>\n\nManage affiliates and Instagram campaigns using the buttons below.",
             parse_mode=ParseMode.HTML,
             reply_markup=admin_menu(),
         )
@@ -1722,6 +3130,8 @@ async def post_init(app: Application):
         [
             ("start", "Open Betroxy"),
             ("affiliate", "Affiliate dashboard"),
+            ("igstats", "Instagram link tracker"),
+            ("igtoday", "Today Instagram tracking"),
         ]
     )
 
@@ -1756,6 +3166,28 @@ def main():
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    campaign_single_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(campaign_add_single_start, pattern=r"^campaign_add_single$")],
+        states={CAMPAIGN_ADD_SINGLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, campaign_add_single_save)]},
+        fallbacks=[CommandHandler("cancel", campaign_cancel)],
+    )
+
+    campaign_bulk_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(campaign_add_bulk_start, pattern=r"^campaign_add_bulk$")],
+        states={CAMPAIGN_ADD_BULK: [MessageHandler(filters.TEXT & ~filters.COMMAND, campaign_add_bulk_save)]},
+        fallbacks=[CommandHandler("cancel", campaign_cancel)],
+    )
+
+    theme_upload_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(theme_upload_start, pattern=r"^theme_upload$")],
+        states={
+            THEME_UPLOAD: [
+                MessageHandler(filters.Document.ALL, theme_upload_save)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", theme_upload_cancel)],
     )
 
     search_conv = ConversationHandler(
@@ -1824,6 +3256,8 @@ def main():
     app.add_handler(CommandHandler("agent", agent_stats_command))
     app.add_handler(CommandHandler("agent_rate", agent_rate_command))
     app.add_handler(CommandHandler("agent_access", agent_access_command))
+    app.add_handler(CommandHandler("igstats", igstats_command))
+    app.add_handler(CommandHandler("igtoday", igtoday_command))
     app.add_handler(
         CommandHandler(
             "create_instagram_affiliates",
@@ -1832,6 +3266,9 @@ def main():
     )
 
     app.add_handler(add_conv)
+    app.add_handler(campaign_single_conv)
+    app.add_handler(campaign_bulk_conv)
+    app.add_handler(theme_upload_conv)
     app.add_handler(search_conv)
     app.add_handler(edit_name_conv)
     app.add_handler(edit_code_conv)
@@ -1847,7 +3284,8 @@ def main():
     )
     app.add_error_handler(error_handler)
 
-    logger.info("Betroxy Official Bot starting...")
+    Thread(target=run_tracker_api, daemon=True).start()
+    logger.info("Betroxy Official Bot + Instagram tracker starting...")
     app.run_polling(drop_pending_updates=True)
 
 
