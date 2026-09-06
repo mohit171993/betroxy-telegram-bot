@@ -106,6 +106,7 @@ CAMPAIGN_EDIT_SOURCE = 35
 CAMPAIGN_DISABLE_BY_LINK = 36
 CAMPAIGN_DELETE_BY_LINK = 37
 VERIFY_PROOF_UPLOAD = 38
+CAMPAIGN_SYNC_FINAL = 39
 THEME_UPLOAD = 40
 
 
@@ -972,6 +973,9 @@ def campaign_menu():
             ],
             [
                 InlineKeyboardButton("📚 Bulk Create Links", callback_data="campaign_add_bulk"),
+                InlineKeyboardButton("✅ Sync Final Promoted Links", callback_data="campaign_sync_final"),
+            ],
+            [
                 InlineKeyboardButton("📥 Export CSV", callback_data="campaign_export"),
             ],
             [
@@ -2291,6 +2295,109 @@ def find_campaign_link_from_input(raw_value):
                 (parsed["handle"],),
             )
             return cur.fetchone(), parsed
+
+
+
+def all_campaign_links(include_inactive=True):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            if include_inactive:
+                cur.execute(
+                    """
+                    SELECT * FROM campaign_links
+                    ORDER BY created_at, id
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT * FROM campaign_links
+                    WHERE is_active=TRUE
+                    ORDER BY created_at, id
+                    """
+                )
+            return cur.fetchall()
+
+
+def set_campaign_links_active_by_ids(ids, active):
+    ids = [int(x) for x in ids]
+    if not ids:
+        return 0
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE campaign_links
+                SET is_active=%s
+                WHERE id = ANY(%s)
+                """,
+                (bool(active), ids),
+            )
+            count = cur.rowcount
+        conn.commit()
+    return count
+
+
+def delete_campaign_links_by_ids(ids):
+    ids = [int(x) for x in ids]
+    if not ids:
+        return 0
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM campaign_links
+                WHERE id = ANY(%s)
+                """,
+                (ids,),
+            )
+            count = cur.rowcount
+        conn.commit()
+    return count
+
+
+def resolve_or_create_final_promoted_links(raw_text):
+    """
+    Parse a pasted final list of Instagram / Telegram / Batraxy links.
+    Existing campaign links are matched; Instagram/Telegram sources that do not
+    exist are created automatically. Returns kept rows + unresolved items.
+    """
+    raw_lines = []
+    seen = set()
+    for line in (raw_text or "").splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        raw_lines.append(item)
+
+    kept = []
+    unresolved = []
+    seen_ids = set()
+
+    for item in raw_lines[:200]:
+        try:
+            row, parsed = find_campaign_link_from_input(item)
+            if not row and not parsed.get("slug_lookup"):
+                row, _created = create_campaign_creator(item)
+            if row:
+                if int(row["id"]) not in seen_ids:
+                    kept.append(row)
+                    seen_ids.add(int(row["id"]))
+            else:
+                unresolved.append(item)
+        except Exception:
+            unresolved.append(item)
+
+    # Re-fetch latest rows in case some were created.
+    refreshed = []
+    for row in kept:
+        latest = campaign_link_by_code(row["agent_code"])
+        refreshed.append(latest or row)
+    return refreshed, unresolved
 
 
 def set_campaign_link_active(code, active):
@@ -4348,6 +4455,123 @@ async def verify_upload_cancel(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 
+
+async def campaign_sync_final_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    await q.message.reply_text(
+        "✅ <b>Sync Final Promoted Links</b>\n\n"
+        "Paste the FINAL list of links actually used by the promoter, one per line.\n\n"
+        "Accepted:\n"
+        "• Instagram profile links\n"
+        "• Telegram channel/profile links\n"
+        "• Existing Batraxy landing links\n\n"
+        "The bot will KEEP these links active, create any missing valid source links, "
+        "then show every other campaign link and ask whether you want to DISABLE or DELETE them.\n\n"
+        "Nothing is disabled/deleted until you confirm.",
+        parse_mode=ParseMode.HTML,
+    )
+    return CAMPAIGN_SYNC_FINAL
+
+
+async def campaign_sync_final_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await require_admin(update):
+        return ConversationHandler.END
+
+    raw = update.message.text or ""
+    kept_rows, unresolved = resolve_or_create_final_promoted_links(raw)
+
+    if not kept_rows:
+        await update.message.reply_text(
+            "❌ No valid campaign links were identified. Please paste the final links again.",
+            reply_markup=campaign_menu(),
+        )
+        return ConversationHandler.END
+
+    keep_ids = {int(r["id"]) for r in kept_rows}
+    all_rows = all_campaign_links(include_inactive=True)
+    other_rows = [r for r in all_rows if int(r["id"]) not in keep_ids]
+
+    # Ensure final/promoted list is active.
+    set_campaign_links_active_by_ids(list(keep_ids), True)
+
+    context.user_data["sync_keep_ids"] = list(keep_ids)
+    context.user_data["sync_other_ids"] = [int(r["id"]) for r in other_rows]
+
+    lines = [
+        "🔍 <b>Final Promoted Links Review</b>",
+        "",
+        f"Final links kept active: <b>{len(kept_rows)}</b>",
+        f"Other campaign links found: <b>{len(other_rows)}</b>",
+        f"Unresolved pasted items: <b>{len(unresolved)}</b>",
+    ]
+
+    if other_rows:
+        lines.append("\n<b>Other links:</b>")
+        for r in other_rows[:30]:
+            status = "ACTIVE" if r.get("is_active") else "DISABLED"
+            lines.append(
+                f"• @{html.escape(str(r['instagram_username']))} "
+                f"— <code>{html.escape(str(r['slug']))}</code> "
+                f"({status})"
+            )
+        if len(other_rows) > 30:
+            lines.append(f"…and {len(other_rows)-30} more.")
+
+    if unresolved:
+        lines.append("\n<b>Could not identify:</b>")
+        for item in unresolved[:10]:
+            lines.append(f"• <code>{html.escape(item)}</code>")
+
+    if not other_rows:
+        lines.append("\n✅ There are no extra campaign links to clean up.")
+        await update.message.reply_text(
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+            disable_web_page_preview=True,
+        )
+        context.user_data.pop("sync_keep_ids", None)
+        context.user_data.pop("sync_other_ids", None)
+        return ConversationHandler.END
+
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                f"⛔ Disable Other {len(other_rows)}",
+                callback_data="campaign_sync_disable_others",
+            ),
+            InlineKeyboardButton(
+                f"🗑 Delete Other {len(other_rows)}",
+                callback_data="campaign_sync_delete_confirm",
+            ),
+        ],
+        [
+            InlineKeyboardButton("✅ Keep Everything", callback_data="campaign_sync_keep_all"),
+        ],
+        [
+            InlineKeyboardButton("❌ Cancel", callback_data="campaign_home"),
+        ],
+    ])
+
+    lines.append(
+        "\n<b>What should I do with the other links?</b>\n"
+        "Disable = keeps history and lets you re-enable later.\n"
+        "Delete = permanently removes the campaign link rows."
+    )
+
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+        disable_web_page_preview=True,
+    )
+    return ConversationHandler.END
+
+
 async def campaign_add_single_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -4857,6 +5081,64 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption=f"📄 <b>Campaign Compliance Report — Day {day}/7</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=verification_list_keyboard(rows, day=day),
+        )
+        return
+
+
+    if data == "campaign_sync_disable_others":
+        ids = context.user_data.get("sync_other_ids") or []
+        count = set_campaign_links_active_by_ids(ids, False)
+        context.user_data.pop("sync_keep_ids", None)
+        context.user_data.pop("sync_other_ids", None)
+        await q.message.reply_text(
+            f"⛔ <b>{count} other campaign links disabled.</b>\n\n"
+            "Your final promoted list remains active. Historical data is preserved.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
+        return
+
+    if data == "campaign_sync_delete_confirm":
+        ids = context.user_data.get("sync_other_ids") or []
+        if not ids:
+            await q.message.reply_text("No extra links are waiting for deletion.", reply_markup=campaign_menu())
+            return
+        await q.message.reply_text(
+            f"⚠️ <b>Permanent Delete Confirmation</b>\n\n"
+            f"You are about to permanently delete <b>{len(ids)}</b> campaign links.\n"
+            "The final promoted links will remain active.\n\n"
+            "Are you sure?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    f"🗑 YES, DELETE {len(ids)}",
+                    callback_data="campaign_sync_delete_others"
+                )],
+                [InlineKeyboardButton("❌ Cancel", callback_data="campaign_home")],
+            ]),
+        )
+        return
+
+    if data == "campaign_sync_delete_others":
+        ids = context.user_data.get("sync_other_ids") or []
+        count = delete_campaign_links_by_ids(ids)
+        context.user_data.pop("sync_keep_ids", None)
+        context.user_data.pop("sync_other_ids", None)
+        await q.message.reply_text(
+            f"🗑 <b>{count} other campaign links permanently deleted.</b>\n\n"
+            "Your final promoted list remains active.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
+        return
+
+    if data == "campaign_sync_keep_all":
+        context.user_data.pop("sync_keep_ids", None)
+        context.user_data.pop("sync_other_ids", None)
+        await q.message.reply_text(
+            "✅ No links were disabled or deleted.\n"
+            "Your final promoted links remain active.",
+            reply_markup=campaign_menu(),
         )
         return
 
@@ -5798,6 +6080,24 @@ def main():
         fallbacks=[CommandHandler("cancel", verify_upload_cancel)],
     )
 
+    campaign_sync_final_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                campaign_sync_final_start,
+                pattern=r"^campaign_sync_final$"
+            )
+        ],
+        states={
+            CAMPAIGN_SYNC_FINAL: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    campaign_sync_final_preview,
+                )
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", campaign_cancel)],
+    )
+
     campaign_single_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(campaign_add_single_start, pattern=r"^campaign_add_single$")],
         states={CAMPAIGN_ADD_SINGLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, campaign_add_single_save)]},
@@ -5996,6 +6296,7 @@ def main():
 
     app.add_handler(add_conv)
     app.add_handler(verify_proof_conv)
+    app.add_handler(campaign_sync_final_conv)
     app.add_handler(campaign_single_conv)
     app.add_handler(campaign_edit_username_conv)
     app.add_handler(campaign_edit_slug_conv)
