@@ -415,41 +415,8 @@ def init_db():
                 ON CONFLICT (id) DO NOTHING
                 """
             )
-
-            cur.execute(
-                """
-                INSERT INTO campaign_links (instagram_username, slug, agent_code)
-                VALUES
-                ('fakt_cricket_memes','fakt-cricket-memes','faktcricket'),
-                ('ritikwins','ritikwins','ritikwins'),
-                ('theankuedit','theankuedit','theankuedit'),
-                ('5wides','5wides','5wides'),
-                ('cricket.official10','cricket-official10','cricketofficial10'),
-                ('bharath._editss','bharath-editss','bharatheditss'),
-                ('ryuzakiii.exeeeeee','ryuzakiii-exeeeeee','ryuzakiiiexe'),
-                ('cric__master18','cric-master18','cricmaster18'),
-                ('akash_mahi0007','akash-mahi0007','akashmahi0007'),
-                ('cricysaakir2.0','cricysaakir2-0','cricysaakir20'),
-                ('ishankishan32_','ishankishan32','ishankishan32'),
-                ('rsnreel','rsnreel','rsnreel'),
-                ('fahadcricketreviews','fahadcricketreviews','fahadcricket'),
-                ('cricsays','cricsays','cricsays'),
-                ('saketeditt','saketeditt','saketeditt'),
-                ('rohit_sharma_status._45','rohit-sharma-status-45','rohitstatus45'),
-                ('official_bobby_4uhh_','official-bobby-4uhh','officialbobby4'),
-                ('surat_tennis_cricket_','surat-tennis-cricket','surattennis'),
-                ('cricket_exeee','cricket-exeee','cricketexeee'),
-                ('smriti_jemi_lovers','smriti-jemi-lovers','smritijemi'),
-                ('maxxo_editz_45','maxxo-editz-45','maxxoeditz45'),
-                ('rohit_sharma_.status_king','rohit-sharma-status-king','rohitstatusking'),
-                ('hitman_cha_diwana___45','hitman-cha-diwana-45','hitmandiwana45'),
-                ('rishabh_dines17','rishabh-dines17','rishabhdines17'),
-                ('csk_marathi_status_2.0','csk-marathi-status-2-0','cskmarathi20'),
-                ('virat.kohli.marathi.status','virat-kohli-marathi-status','viratkohlitheme'),
-                ('mahi.lifetime','mahi-lifetime','mahilifetime')
-                ON CONFLICT DO NOTHING
-                """
-            )
+            # Default campaign reseeding disabled.
+            # Deleted/disabled creator links must remain deleted/disabled after redeploys.
 
         conn.commit()
 
@@ -4333,7 +4300,7 @@ def campaign_links_keyboard(page=0, per_page=8):
         nav.append(InlineKeyboardButton("➡️", callback_data=f"campaign_links_page:{page+1}"))
     rows.append(nav)
     rows.append([InlineKeyboardButton("🏠 Campaign Tracker", callback_data="campaign_home")])
-    return InlineKeyboardMarkup(rows), page, total_pages
+    return InlineKeyboardMarkup(rows), page, total_pages, len(links)
 
 
 def make_campaign_csv():
@@ -5602,14 +5569,26 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "campaign_links":
-        kb, page, total_pages = campaign_links_keyboard(0)
-        await q.message.reply_text(f"🔗 <b>Creator Tracking Links</b>\n\nPage {page+1} of {total_pages}. Tap creator name to open Instagram, or Manage to edit.", parse_mode=ParseMode.HTML, reply_markup=kb)
+        kb, page, total_pages, total_links = campaign_links_keyboard(0)
+        await q.message.reply_text(
+            f"🔗 <b>Creator Tracking Links</b>\n\n"
+            f"Total active creators: <b>{total_links}</b>\n"
+            f"Page {page+1} of {total_pages}. Tap creator name to open Instagram, or Manage to edit.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb
+        )
         return
 
     if data.startswith("campaign_links_page:"):
         page = int(data.split(":",1)[1])
-        kb, page, total_pages = campaign_links_keyboard(page)
-        await q.message.reply_text(f"🔗 <b>Creator Tracking Links</b>\n\nPage {page+1} of {total_pages}.", parse_mode=ParseMode.HTML, reply_markup=kb)
+        kb, page, total_pages, total_links = campaign_links_keyboard(page)
+        await q.message.reply_text(
+            f"🔗 <b>Creator Tracking Links</b>\n\n"
+            f"Total active creators: <b>{total_links}</b>\n"
+            f"Page {page+1} of {total_pages}.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb
+        )
         return
 
 
