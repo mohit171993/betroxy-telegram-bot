@@ -1667,46 +1667,141 @@ def verification_creator_text(row, day):
 
 
 
+
+def verification_last_checked(row):
+    values = [x for x in (row.get("auto_checked_at"), row.get("checked_at")) if x]
+    return max(values) if values else None
+
+
+def verification_final_result(row):
+    statuses = [
+        row.get("bio_status") or "pending",
+        row.get("only_our_link_status") or "pending",
+        row.get("story_status") or "pending",
+        row.get("story_link_status") or "pending",
+    ]
+
+    # Any confirmed problem takes priority over an unknown/pending item.
+    if any(x in {"missing", "issue"} for x in statuses):
+        return "ACTION REQUIRED"
+
+    if all(x == "verified" for x in statuses):
+        return "PASS"
+
+    return "MANUAL REVIEW"
+
+
+def verification_source_url(row):
+    username = str(row.get("instagram_username") or "").strip().lstrip("@")
+    source = (row.get("source_type") or "instagram").lower()
+    if row.get("source_url"):
+        return str(row["source_url"])
+    if source == "instagram":
+        return f"https://www.instagram.com/{username}/"
+    if source == "telegram":
+        return f"https://t.me/{username}"
+    return f"{PUBLIC_BASE_URL}/{row['slug']}"
+
+
+def promoter_report_keyboard(rows, day=1):
+    """
+    Promoter-friendly direct links:
+    left button opens creator/source page; right button opens assigned Batraxy URL.
+    """
+    buttons = []
+    for r in rows:
+        username = str(r.get("instagram_username") or "").strip().lstrip("@")
+        label = username[:18] + ("…" if len(username) > 18 else "")
+        buttons.append([
+            InlineKeyboardButton(f"📸 @{label}", url=verification_source_url(r)),
+            InlineKeyboardButton("🔗 Assigned Batraxy", url=f"{PUBLIC_BASE_URL}/{r['slug']}"),
+        ])
+
+    buttons.append([
+        InlineKeyboardButton("🔄 Refresh Report", callback_data=f"verify_auto_report:{day}"),
+        InlineKeyboardButton("📄 Compliance PDF", callback_data=f"verify_pdf:{day}"),
+    ])
+    buttons.append([
+        InlineKeyboardButton("✅ Verification Center", callback_data="verify_home"),
+        InlineKeyboardButton("⬅️ Campaign Tracker", callback_data="campaign_home"),
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
 def automatic_verification_report_text(rows, day):
     total = len(rows)
-    compliant = issues = pending = 0
-    table = [
-        f"{'Creator':<16} {'Bio':<4} {'Only':<4} {'Story':<5} {'Link':<4}",
-        "-" * 39,
-    ]
+
+    def icon(value):
+        return VERIFY_STATUS_LABEL.get(value, "⏳")
+
+    final_counts = {"PASS": 0, "ACTION REQUIRED": 0, "MANUAL REVIEW": 0}
     for r in rows:
-        b = VERIFY_STATUS_LABEL.get(r["bio_status"], "⏳")
-        o = VERIFY_STATUS_LABEL.get(r["only_our_link_status"], "⏳")
-        s = VERIFY_STATUS_LABEL.get(r["story_status"], "⏳")
-        l = VERIFY_STATUS_LABEL.get(r["story_link_status"], "⏳")
+        final_counts[verification_final_result(r)] += 1
 
-        vals = [
-            r["bio_status"],
-            r["only_our_link_status"],
-            r["story_status"],
-            r["story_link_status"],
-        ]
-        if all(v == "verified" for v in vals):
-            compliant += 1
-        elif any(v in {"missing", "issue"} for v in vals):
-            issues += 1
-        else:
-            pending += 1
+    # Overall report time is the newest result in this report.
+    checked_values = [verification_last_checked(r) for r in rows if verification_last_checked(r)]
+    newest = max(checked_values) if checked_values else None
+    newest_text = newest.strftime("%d %b %Y %H:%M UTC") if newest else "No completed check yet"
 
-        creator = ("@" + str(r["instagram_username"]))[:16]
-        table.append(f"{creator:<16} {b:<4} {o:<4} {s:<5} {l:<4}")
+    lines = [
+        f"📊 <b>BETROXY Promoter Compliance Report — Day {day}/7</b>",
+        "",
+        f"<b>Creators:</b> {total}   "
+        f"<b>PASS:</b> {final_counts['PASS']}   "
+        f"<b>ACTION:</b> {final_counts['ACTION REQUIRED']}   "
+        f"<b>MANUAL:</b> {final_counts['MANUAL REVIEW']}",
+        f"<b>Latest check:</b> {newest_text}",
+        "",
+        "<b>Final result</b>",
+        "✅ PASS = all required checks confirmed",
+        "🚨 ACTION REQUIRED = missing/incorrect link or another confirmed issue",
+        "🕵️ MANUAL REVIEW = automatic checker could not confirm everything",
+        "",
+        "<b>Columns</b>",
+        "Bio = assigned Batraxy link is in bio",
+        "Only = no additional external/promotional bio link",
+        "Story = active Story confirmed",
+        "Link = assigned Batraxy link confirmed in Story",
+        "",
+        "<pre>",
+        f"{'Creator':<18} {'B':<2} {'O':<2} {'S':<2} {'L':<2} {'Final':<13} {'Checked':<11}",
+        "-" * 61,
+    ]
 
-    return (
-        f"📊 <b>BETROXY Auto Compliance Report — Day {day}/7</b>\n\n"
-        "<pre>" + html.escape("\n".join(table)) + "</pre>\n"
-        f"<b>Total:</b> {total} | "
-        f"<b>Compliant:</b> {compliant} | "
-        f"<b>Issues:</b> {issues} | "
-        f"<b>Pending/Unknown:</b> {pending}\n\n"
-        f"Recommended checker: <b>Local Browser (free)</b>\n"
-        f"Railway direct checker: <b>{'ON' if ENABLE_RAILWAY_FREE_CHECKER else 'OFF'}</b>\n"
-        f"Bio + Story results update here automatically when the local checker runs."
-    )
+    final_short = {
+        "PASS": "PASS",
+        "ACTION REQUIRED": "ACTION",
+        "MANUAL REVIEW": "MANUAL",
+    }
+
+    for r in rows:
+        name = str(r.get("instagram_username") or "")
+        name = name[:17] + ("…" if len(name) > 17 else "")
+        checked = verification_last_checked(r)
+        checked_text = checked.strftime("%d %b %H:%M") if checked else "Not checked"
+        result = verification_final_result(r)
+        lines.append(
+            f"@{name:<17} "
+            f"{icon(r.get('bio_status')):<2} "
+            f"{icon(r.get('only_our_link_status')):<2} "
+            f"{icon(r.get('story_status')):<2} "
+            f"{icon(r.get('story_link_status')):<2} "
+            f"{final_short[result]:<13} "
+            f"{checked_text:<11}"
+        )
+
+    lines += [
+        "</pre>",
+        "",
+        "<b>Status symbols</b>",
+        "✅ Confirmed   ⚠️ Issue   ❌ Missing   ⏳ Manual check needed",
+        "",
+        "<b>Promoter action</b>",
+        "• 🚨 ACTION: fix the flagged item and send updated proof.",
+        "• 🕵️ MANUAL: send current Story/screenshot proof so it can be verified.",
+        "• Use the buttons below to open each creator page and their assigned Batraxy link.",
+    ]
+    return "\n".join(lines)
 
 
 def build_verification_pdf(rows, day):
@@ -1714,47 +1809,124 @@ def build_verification_pdf(rows, day):
     doc = SimpleDocTemplate(
         output,
         pagesize=landscape(A4),
-        rightMargin=26, leftMargin=26, topMargin=28, bottomMargin=28,
-        title=f"BETROXY Campaign Compliance Day {day}",
+        rightMargin=22, leftMargin=22, topMargin=24, bottomMargin=24,
+        title=f"BETROXY Promoter Compliance Report Day {day}",
         author="BETROXY",
     )
     styles = getSampleStyleSheet()
-    story = [
-        Paragraph(f"BETROXY - Campaign Compliance Report - Day {day}/7", styles["Title"]),
-        Spacer(1, 10),
-    ]
-    data = [[
-        "Creator", "Source", "Bio", "Only Our Link", "Story",
-        "Story Link", "Proof", "Last Checked"
-    ]]
+    small = ParagraphStyle(
+        "small",
+        parent=styles["BodyText"],
+        fontSize=7,
+        leading=9,
+    )
+    small_center = ParagraphStyle(
+        "smallcenter",
+        parent=small,
+        alignment=TA_CENTER,
+    )
+    summary_style = ParagraphStyle(
+        "summary",
+        parent=styles["BodyText"],
+        fontSize=9,
+        leading=12,
+        spaceAfter=5,
+    )
+
+    final_counts = {"PASS": 0, "ACTION REQUIRED": 0, "MANUAL REVIEW": 0}
     for r in rows:
-        checked = r.get("checked_at")
+        final_counts[verification_final_result(r)] += 1
+
+    checked_values = [verification_last_checked(r) for r in rows if verification_last_checked(r)]
+    newest = max(checked_values) if checked_values else None
+    newest_text = newest.strftime("%d %b %Y %H:%M UTC") if newest else "No completed check yet"
+
+    story = [
+        Paragraph(f"BETROXY - Promoter Compliance Report - Day {day}/7", styles["Title"]),
+        Spacer(1, 6),
+        Paragraph(
+            f"<b>Creators:</b> {len(rows)} &nbsp;&nbsp; "
+            f"<b>PASS:</b> {final_counts['PASS']} &nbsp;&nbsp; "
+            f"<b>ACTION REQUIRED:</b> {final_counts['ACTION REQUIRED']} &nbsp;&nbsp; "
+            f"<b>MANUAL REVIEW:</b> {final_counts['MANUAL REVIEW']}<br/>"
+            f"<b>Latest check:</b> {html.escape(newest_text)}",
+            summary_style,
+        ),
+        Paragraph(
+            "<b>Definitions:</b> Bio = assigned Batraxy link present in bio; "
+            "Only = no additional external/promotional bio link; "
+            "Story = active Story confirmed; Link = assigned Batraxy link confirmed in Story.<br/>"
+            "<b>Final:</b> PASS = all checks confirmed; ACTION REQUIRED = confirmed issue/missing item; "
+            "MANUAL REVIEW = automatic checker could not confirm everything.",
+            summary_style,
+        ),
+        Spacer(1, 6),
+    ]
+
+    data = [[
+        "Creator / Instagram",
+        "Assigned Batraxy Link",
+        "Bio",
+        "Only",
+        "Story",
+        "Story Link",
+        "Final Result",
+        "Last Checked",
+    ]]
+
+    for r in rows:
+        checked = verification_last_checked(r)
+        checked_text = checked.strftime("%d-%m-%Y %H:%M") if checked else "Not checked"
+        source_url = verification_source_url(r)
+        assigned = f"{PUBLIC_BASE_URL}/{r['slug']}"
+        username = str(r.get("instagram_username") or "").strip().lstrip("@")
+        result = verification_final_result(r)
+
         data.append([
-            "@" + str(r["instagram_username"]),
-            CAMPAIGN_SOURCE_LABELS.get(r.get("source_type") or "instagram", "Instagram"),
-            str(r["bio_status"]).title(),
-            str(r["only_our_link_status"]).title(),
-            str(r["story_status"]).title(),
-            str(r["story_link_status"]).title(),
-            "Yes" if r.get("proof_file_id") else "No",
-            checked.strftime("%d-%m-%Y %H:%M") if checked else "-",
+            Paragraph(
+                f'<link href="{html.escape(source_url, quote=True)}">@{html.escape(username)}</link>',
+                small,
+            ),
+            Paragraph(
+                f'<link href="{html.escape(assigned, quote=True)}">{html.escape(assigned)}</link>',
+                small,
+            ),
+            str(r.get("bio_status") or "pending").replace("_", " ").title(),
+            str(r.get("only_our_link_status") or "pending").replace("_", " ").title(),
+            str(r.get("story_status") or "pending").replace("_", " ").title(),
+            str(r.get("story_link_status") or "pending").replace("_", " ").title(),
+            result,
+            checked_text,
         ])
-    table = Table(data, repeatRows=1, colWidths=[120, 65, 65, 85, 65, 70, 45, 100])
+
+    table = Table(
+        data,
+        repeatRows=1,
+        colWidths=[105, 190, 50, 55, 55, 62, 90, 92],
+    )
     table.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#081C15")),
         ("TEXTCOLOR", (0,0), (-1,0), colors.white),
         ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-        ("FONTSIZE", (0,0), (-1,-1), 8),
+        ("FONTSIZE", (0,0), (-1,-1), 7),
         ("GRID", (0,0), (-1,-1), .35, colors.HexColor("#B9CCC2")),
         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("ALIGN", (2,1), (-2,-1), "CENTER"),
         ("ROWBACKGROUNDS", (0,1), (-1,-1), [
             colors.HexColor("#F7FBF9"),
             colors.HexColor("#EDF6F1"),
         ]),
-        ("TOPPADDING", (0,0), (-1,-1), 6),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+        ("TOPPADDING", (0,0), (-1,-1), 5),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
     ]))
     story.append(table)
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(
+        "<b>Promoter action:</b> Fix every ACTION REQUIRED item. "
+        "For MANUAL REVIEW, provide a current Story screenshot/proof. "
+        "Creator names and assigned Batraxy URLs in this PDF are clickable.",
+        summary_style,
+    ))
     doc.build(story)
     output.seek(0)
     return output
@@ -5112,7 +5284,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text(
             automatic_verification_report_text(rows, day),
             parse_mode=ParseMode.HTML,
-            reply_markup=verification_list_keyboard(rows, day=day),
+            reply_markup=promoter_report_keyboard(rows, day=day),
         )
         return
 
