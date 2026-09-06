@@ -94,6 +94,7 @@ CAMPAIGN_ADD_BULK = 31
 CAMPAIGN_EDIT_USERNAME = 32
 CAMPAIGN_EDIT_SLUG = 33
 CAMPAIGN_EDIT_CODE = 34
+CAMPAIGN_EDIT_SOURCE = 35
 THEME_UPLOAD = 40
 
 
@@ -221,6 +222,20 @@ def init_db():
                     is_active BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
+                """
+            )
+
+            cur.execute(
+                """
+                ALTER TABLE campaign_links
+                ADD COLUMN IF NOT EXISTS source_type TEXT DEFAULT 'instagram'
+                """
+            )
+            cur.execute(
+                """
+                UPDATE campaign_links
+                SET source_type='instagram'
+                WHERE source_type IS NULL OR TRIM(source_type)=''
                 """
             )
 
@@ -884,8 +899,11 @@ def campaign_menu():
 
 
 def campaign_creator_menu(code):
+    row = campaign_link_by_code(code)
+    landing_url = f"{PUBLIC_BASE_URL}/{row['slug']}" if row else PUBLIC_BASE_URL
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("🌐 Open Landing Page", url=landing_url)],
             [
                 InlineKeyboardButton("✏️ Edit", callback_data=f"campaign_edit:{code}"),
                 InlineKeyboardButton("🗑 Delete", callback_data=f"campaign_delete_confirm:{code}"),
@@ -906,6 +924,7 @@ def campaign_edit_menu(code):
             ],
             [
                 InlineKeyboardButton("🆔 Affiliate Code", callback_data=f"campaign_edit_code:{code}"),
+                InlineKeyboardButton("🏷 Source", callback_data=f"campaign_edit_source:{code}"),
             ],
             [InlineKeyboardButton("⬅️ Back", callback_data=f"campaign_creator:{code}")],
         ]
@@ -1250,6 +1269,53 @@ async def create_instagram_affiliates(
 # ============================================================
 # INSTAGRAM LINK TRACKER
 # ============================================================
+
+
+
+CAMPAIGN_SOURCE_LABELS = {
+    "instagram": "Instagram",
+    "telegram": "Telegram",
+    "meta_ads": "Meta Ads",
+    "google_ads": "Google Ads",
+}
+
+
+def normalize_campaign_source(value):
+    value = (value or "").strip().lower().replace(" ", "_")
+    aliases = {
+        "insta": "instagram",
+        "instagram": "instagram",
+        "telegram": "telegram",
+        "tg": "telegram",
+        "meta": "meta_ads",
+        "meta_ads": "meta_ads",
+        "facebook": "meta_ads",
+        "facebook_ads": "meta_ads",
+        "google": "google_ads",
+        "google_ads": "google_ads",
+    }
+    source = aliases.get(value)
+    if source not in CAMPAIGN_SOURCE_LABELS:
+        raise ValueError("Source must be Instagram, Telegram, Meta Ads or Google Ads")
+    return source
+
+
+def update_campaign_source(code, source_type):
+    source_type = normalize_campaign_source(source_type)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE campaign_links
+                SET source_type=%s
+                WHERE LOWER(agent_code)=LOWER(%s)
+                RETURNING *
+                """,
+                (source_type, code),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return row
 
 
 def update_campaign_username(code, new_username):
@@ -1625,6 +1691,7 @@ def instagram_tracker_stats(code=None, period="all"):
                     cl.agent_code AS code,
                     cl.instagram_username AS name,
                     cl.slug,
+                    COALESCE(cl.source_type, 'instagram') AS source_type,
                     COALESCE(v.landing_visits, 0) AS landing_visits,
                     COALESCE(v.unique_visitors, 0) AS unique_visitors,
                     COALESCE(o.telegram_clicks, 0) AS telegram_clicks,
@@ -1707,6 +1774,7 @@ def build_campaign_report_pdf(rows):
     data = [[
         "No.",
         "Creator",
+        "Source",
         "Landing Visits",
         "Unique",
         "Bot Clicks",
@@ -1743,6 +1811,7 @@ def build_campaign_report_pdf(rows):
         data.append([
             str(i),
             "@" + str(r["name"]),
+            CAMPAIGN_SOURCE_LABELS.get(r.get("source_type") or "instagram", "Instagram"),
             str(vis),
             str(unique),
             str(bot_clicks),
@@ -1756,6 +1825,7 @@ def build_campaign_report_pdf(rows):
     data.append([
         "",
         "TOTAL",
+        "",
         str(total_vis),
         str(total_unique),
         str(total_bot),
@@ -1769,7 +1839,7 @@ def build_campaign_report_pdf(rows):
     table = Table(
         data,
         repeatRows=1,
-        colWidths=[28, 125, 62, 48, 54, 54, 54, 62, 52, 76],
+        colWidths=[26, 105, 58, 58, 45, 50, 50, 50, 58, 48, 70],
     )
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#081C15")),
@@ -2759,6 +2829,66 @@ async def campaign_edit_code_save(update: Update, context: ContextTypes.DEFAULT_
     return ConversationHandler.END
 
 
+
+async def campaign_edit_source_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    code_value = q.data.split(":", 1)[1]
+    row = campaign_link_by_code(code_value)
+    if not row:
+        await q.message.reply_text("❌ Creator link not found.")
+        return ConversationHandler.END
+
+    context.user_data["campaign_edit_source_code"] = code_value
+    current = CAMPAIGN_SOURCE_LABELS.get(row.get("source_type") or "instagram", "Instagram")
+    await q.message.reply_text(
+        f"🏷 <b>Change Traffic Source</b>\\n\\n"
+        f"Current: <b>{current}</b>\\n\\n"
+        "Choose the source:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📸 Instagram", callback_data="campaign_source_set:instagram"),
+                InlineKeyboardButton("✈️ Telegram", callback_data="campaign_source_set:telegram"),
+            ],
+            [
+                InlineKeyboardButton("Ⓜ️ Meta Ads", callback_data="campaign_source_set:meta_ads"),
+                InlineKeyboardButton("🔎 Google Ads", callback_data="campaign_source_set:google_ads"),
+            ],
+            [InlineKeyboardButton("❌ Cancel", callback_data=f"campaign_creator:{code_value}")],
+        ]),
+    )
+    return CAMPAIGN_EDIT_SOURCE
+
+
+async def campaign_edit_source_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        return ConversationHandler.END
+
+    code_value = context.user_data.get("campaign_edit_source_code")
+    source_type = q.data.split(":", 1)[1]
+    try:
+        row = update_campaign_source(code_value, source_type)
+        if not row:
+            raise ValueError("Creator link not found")
+        label = CAMPAIGN_SOURCE_LABELS.get(row["source_type"], row["source_type"])
+        await q.message.reply_text(
+            f"✅ Source updated to <b>{label}</b>.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_creator_menu(row["agent_code"]),
+        )
+    except Exception as exc:
+        await q.message.reply_text(f"❌ {exc}")
+    finally:
+        context.user_data.pop("campaign_edit_source_code", None)
+    return ConversationHandler.END
+
+
 async def campaign_add_single_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -3137,13 +3267,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         table = [
-            f"{'Creator':<20} {'Vis':>4} {'Bot':>4} {'Web':>4} {'Dep':>4}",
-            "-" * 40,
+            f"{'Creator':<16} {'Src':<7} {'Vis':>4} {'Bot':>4} {'Web':>4} {'Dep':>4}",
+            "-" * 44,
         ]
         for r in rows:
-            creator = ("@" + str(r["name"]))[:20]
+            creator = ("@" + str(r["name"]))[:16]
+            src = {
+                "instagram": "Insta",
+                "telegram": "TG",
+                "meta_ads": "Meta",
+                "google_ads": "Google",
+            }.get(r.get("source_type") or "instagram", "Insta")
             table.append(
-                f"{creator:<20} "
+                f"{creator:<16} {src:<7} "
                 f"{int(r['landing_visits'] or 0):>4} "
                 f"{int(r['telegram_clicks'] or 0):>4} "
                 f"{int(r['website_clicks'] or 0):>4} "
@@ -3157,8 +3293,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "dep": sum(int(r["deposits"] or 0) for r in rows),
         }
         table.extend([
-            "-" * 40,
-            f"{'TOTAL':<20} {totals['vis']:>4} {totals['bot']:>4} {totals['web']:>4} {totals['dep']:>4}",
+            "-" * 44,
+            f"{'TOTAL':<16} {'':<7} {totals['vis']:>4} {totals['bot']:>4} {totals['web']:>4} {totals['dep']:>4}",
         ])
 
         text = (
@@ -3248,7 +3384,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✏️ <b>Edit Creator Link</b>\n\n"
             f"Instagram: <b>@{row['instagram_username']}</b>\n"
             f"Slug: <code>{row['slug']}</code>\n"
-            f"Affiliate code: <code>{row['agent_code']}</code>\n\n"
+            f"Affiliate code: <code>{row['agent_code']}</code>\n"
+            f"Source: <b>{CAMPAIGN_SOURCE_LABELS.get(row.get('source_type') or 'instagram', 'Instagram')}</b>\n\n"
             "Choose what you want to edit:",
             parse_mode=ParseMode.HTML,
             reply_markup=campaign_edit_menu(c),
@@ -4044,6 +4181,24 @@ def main():
         fallbacks=[CommandHandler("cancel", campaign_cancel)],
     )
 
+    campaign_edit_source_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                campaign_edit_source_start,
+                pattern=r"^campaign_edit_source:"
+            )
+        ],
+        states={
+            CAMPAIGN_EDIT_SOURCE: [
+                CallbackQueryHandler(
+                    campaign_edit_source_save,
+                    pattern=r"^campaign_source_set:"
+                )
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", campaign_cancel)],
+    )
+
     campaign_bulk_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(campaign_add_bulk_start, pattern=r"^campaign_add_bulk$")],
         states={CAMPAIGN_ADD_BULK: [MessageHandler(filters.TEXT & ~filters.COMMAND, campaign_add_bulk_save)]},
@@ -4140,6 +4295,7 @@ def main():
     app.add_handler(campaign_edit_username_conv)
     app.add_handler(campaign_edit_slug_conv)
     app.add_handler(campaign_edit_code_conv)
+    app.add_handler(campaign_edit_source_conv)
     app.add_handler(campaign_bulk_conv)
     app.add_handler(theme_upload_conv)
     app.add_handler(search_conv)
