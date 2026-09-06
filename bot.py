@@ -14,6 +14,12 @@ from threading import Thread
 
 from flask import Flask, jsonify, request, redirect, Response
 
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
 import psycopg
 from psycopg.rows import dict_row
 
@@ -869,7 +875,8 @@ def campaign_menu():
                 InlineKeyboardButton("📥 Export CSV", callback_data="campaign_export"),
             ],
             [
-                InlineKeyboardButton("🎨 Landing Design Manager", callback_data="theme_home"),
+                InlineKeyboardButton("📄 Download PDF", callback_data="campaign_pdf"),
+                InlineKeyboardButton("🎨 Landing Design", callback_data="theme_home"),
             ],
             [InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_home")],
         ]
@@ -1639,6 +1646,169 @@ def instagram_tracker_stats(code=None, period="all"):
                 params,
             )
             return cur.fetchall()
+
+
+
+def build_campaign_report_pdf(rows):
+    """
+    Build a professional landscape PDF report in memory and return BytesIO.
+    """
+    output = io.BytesIO()
+    doc = SimpleDocTemplate(
+        output,
+        pagesize=landscape(A4),
+        rightMargin=26,
+        leftMargin=26,
+        topMargin=28,
+        bottomMargin=28,
+        title="BETROXY Instagram Campaign Report",
+        author="BETROXY",
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "BetroxyTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=20,
+        leading=24,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#081C15"),
+        spaceAfter=6,
+    )
+    sub_style = ParagraphStyle(
+        "BetroxySub",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=12,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#5F746A"),
+        spaceAfter=14,
+    )
+    foot_style = ParagraphStyle(
+        "BetroxyFoot",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#6A7E74"),
+        spaceBefore=10,
+    )
+
+    story = [
+        Paragraph("BETROXY - Instagram Campaign Report", title_style),
+        Paragraph(
+            "Creator performance summary generated from the live campaign tracker",
+            sub_style,
+        ),
+    ]
+
+    data = [[
+        "No.",
+        "Creator",
+        "Landing Visits",
+        "Unique",
+        "Bot Clicks",
+        "Web Clicks",
+        "Bot Starts",
+        "Registrations",
+        "Deposits",
+        "Deposit Amount",
+    ]]
+
+    total_vis = total_unique = total_bot = total_web = 0
+    total_starts = total_reg = total_dep = 0
+    total_amount = 0.0
+
+    for i, r in enumerate(rows, 1):
+        vis = int(r["landing_visits"] or 0)
+        unique = int(r["unique_visitors"] or 0)
+        bot_clicks = int(r["telegram_clicks"] or 0)
+        web_clicks = int(r["website_clicks"] or 0)
+        starts = int(r["telegram_starts"] or 0)
+        regs = int(r["registrations"] or 0)
+        deps = int(r["deposits"] or 0)
+        amount = float(r["deposit_amount"] or 0)
+
+        total_vis += vis
+        total_unique += unique
+        total_bot += bot_clicks
+        total_web += web_clicks
+        total_starts += starts
+        total_reg += regs
+        total_dep += deps
+        total_amount += amount
+
+        data.append([
+            str(i),
+            "@" + str(r["name"]),
+            str(vis),
+            str(unique),
+            str(bot_clicks),
+            str(web_clicks),
+            str(starts),
+            str(regs),
+            str(deps),
+            f"{amount:,.2f}",
+        ])
+
+    data.append([
+        "",
+        "TOTAL",
+        str(total_vis),
+        str(total_unique),
+        str(total_bot),
+        str(total_web),
+        str(total_starts),
+        str(total_reg),
+        str(total_dep),
+        f"{total_amount:,.2f}",
+    ])
+
+    table = Table(
+        data,
+        repeatRows=1,
+        colWidths=[28, 125, 62, 48, 54, 54, 54, 62, 52, 76],
+    )
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#081C15")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 7.5),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (1, 1), (1, -1), "LEFT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("FONTNAME", (0, 1), (-1, -2), "Helvetica"),
+        ("FONTSIZE", (0, 1), (-1, -1), 7.5),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [
+            colors.HexColor("#F7FBF9"),
+            colors.HexColor("#EDF6F1"),
+        ]),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#D8F3DC")),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR", (0, -1), (-1, -1), colors.HexColor("#081C15")),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#B9CCC2")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+
+    story.append(table)
+    story.append(Spacer(1, 8))
+    story.append(
+        Paragraph(
+            f"Total creators: {len(rows)} &nbsp;&nbsp;|&nbsp;&nbsp; "
+            "Vis = landing visits &nbsp;|&nbsp; Bot = BetroxyBot clicks &nbsp;|&nbsp; "
+            "Web = website clicks",
+            foot_style,
+        )
+    )
+
+    doc.build(story)
+    output.seek(0)
+    return output
 
 
 def tracker_today_totals():
@@ -2928,6 +3098,32 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "campaign_home":
         await q.message.reply_text(campaign_overview_text(), parse_mode=ParseMode.HTML, reply_markup=campaign_menu())
+        return
+
+
+    if data == "campaign_pdf":
+        rows = instagram_tracker_stats()
+        if not rows:
+            await q.message.reply_text(
+                "📄 No campaign data available for PDF yet.",
+                reply_markup=campaign_menu(),
+            )
+            return
+
+        pdf_file = build_campaign_report_pdf(rows)
+        filename = f"BETROXY_Campaign_Report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf"
+
+        await q.message.reply_document(
+            document=pdf_file,
+            filename=filename,
+            caption=(
+                "📄 <b>BETROXY Campaign Report</b>\n"
+                f"Creators: {len(rows)}\n"
+                "Generated from the live campaign tracker."
+            ),
+            parse_mode=ParseMode.HTML,
+            reply_markup=campaign_menu(),
+        )
         return
 
     if data == "campaign_report":
