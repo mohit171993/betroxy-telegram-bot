@@ -1,1 +1,1 @@
-worker: python v42_reporting_center_bootstrap.py
+worker: python v43_latest_reports_bootstrap.py
