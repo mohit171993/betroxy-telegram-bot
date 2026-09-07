@@ -1,3 +1,5 @@
+print("V35_EXACT_BOOTSTRAP_ENTER", flush=True)
+
 from datetime import datetime, timezone, timedelta
 
 import bot
@@ -90,11 +92,8 @@ def _exact_test_batch_complete():
     return True
 
 
-# Replace the completion predicate used by the already-installed result wrapper.
 v27_runner._all_browser_results_received_for_current_run = _exact_test_batch_complete
 
-
-# Paid fallback must also use only the exact creators Windows was given.
 _previous_pending_selector = bot._hybrid_pending_targets
 
 
@@ -113,6 +112,7 @@ def _exact_pending_targets():
 
 bot._hybrid_pending_targets = _exact_pending_targets
 bot.logger.warning("V35_EXACT_HANDOFF_PATCH_ACTIVE")
+print("V35_EXACT_HANDOFF_PATCH_ACTIVE", flush=True)
 
 if __name__ == "__main__":
     bot.main()
