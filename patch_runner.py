@@ -6,6 +6,89 @@ print("PATCH_RUNNER_BULK_FIX_V2_ACTIVE", flush=True)
 bot.logger.warning("PATCH_RUNNER_BULK_FIX_V2_ACTIVE")
 bot.logger.warning("SMART_CHECKER_PATCH_LOADED_FROM_V27_RUNNER")
 
+# TEMPORARY SMART-CHECK TEST SET.
+# Two creators had Story UNKNOWN and one had a clear LIVE/OK Story result.
+# This lets us validate that Apify runs only for unresolved fields.
+SMART_TEST_HANDLES = {
+    "arcbian_akashh",
+    "cricxcrratee",
+    "mumbai_indians_ipl_status",
+}
+
+
+def _is_smart_test_handle(row):
+    return str(row.get("instagram_username") or "").strip().lstrip("@").lower() in SMART_TEST_HANDLES
+
+
+# Limit /api/verifier/targets to the 3 diagnostic creators.
+_original_verifier_targets = bot.tracker_api.view_functions.get("verifier_targets")
+if _original_verifier_targets and not getattr(_original_verifier_targets, "_smart_test_wrapped", False):
+    def _smart_test_verifier_targets(*args, **kwargs):
+        response = _original_verifier_targets(*args, **kwargs)
+        try:
+            data = response.get_json() or {}
+            targets = data.get("targets") or []
+            data["targets"] = [
+                t for t in targets
+                if str(t.get("username") or "").strip().lstrip("@").lower() in SMART_TEST_HANDLES
+            ]
+            data["test_mode"] = True
+            data["test_target_count"] = len(data["targets"])
+            return bot.jsonify(data)
+        except Exception:
+            bot.logger.exception("SMART_TEST target filtering failed")
+            return response
+
+    _smart_test_verifier_targets._smart_test_wrapped = True
+    bot.tracker_api.view_functions["verifier_targets"] = _smart_test_verifier_targets
+    bot.logger.warning("SMART_CHECKER_TEST_MODE_ACTIVE handles=%s", sorted(SMART_TEST_HANDLES))
+
+
+# Make completion detection wait only for the same 3 test creators.
+def _smart_test_all_browser_results_received():
+    control = bot.get_local_verifier_control() or {}
+    requested_at = control.get("requested_at")
+    state = str(control.get("status") or "")
+    if not requested_at or state not in {"requested", "running"}:
+        return False
+
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM campaign_links
+                WHERE is_active=TRUE
+                  AND LOWER(COALESCE(source_type,'instagram'))='instagram'
+                ORDER BY id
+                """
+            )
+            links = [r for r in cur.fetchall() if _is_smart_test_handle(r)]
+
+    if not links:
+        return False
+
+    for cl in links:
+        day = bot.current_campaign_day(cl)
+        v = bot.get_verification_row(cl["id"], day) or {}
+        checked_at = v.get("auto_checked_at")
+        mode = str(v.get("checker_mode") or "").lower()
+        if not checked_at or checked_at < requested_at or mode != "local_browser":
+            return False
+    return True
+
+
+v27_runner._all_browser_results_received_for_current_run = _smart_test_all_browser_results_received
+
+
+# Restrict paid fallback to the exact same test creators.
+_original_hybrid_pending_targets = bot._hybrid_pending_targets
+
+def _smart_test_hybrid_pending_targets():
+    return [x for x in _original_hybrid_pending_targets() if _is_smart_test_handle(x[0])]
+
+bot._hybrid_pending_targets = _smart_test_hybrid_pending_targets
+
 
 def _split_items(raw):
     """Return unique campaign inputs from multiline/whitespace-pasted Telegram text."""
