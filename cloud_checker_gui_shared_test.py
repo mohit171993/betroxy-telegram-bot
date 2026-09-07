@@ -14,7 +14,7 @@ TEST_CREATORS = {
 }
 
 
-def wait_for_cdp(timeout=90):
+def wait_for_cdp(timeout=300):
     end = time.time() + timeout
     while time.time() < end:
         try:
@@ -38,7 +38,11 @@ def logged_in(context):
             body = (page.locator("body").inner_text(timeout=3000) or "").lower()
         except Exception:
             pass
-        if "/accounts/login" in url:
+        if "/accounts/login" in url or "/auth_platform/" in url:
+            return False
+        if "try another device to continue" in body:
+            return False
+        if "the login information you entered is incorrect" in body:
             return False
         if "log in" in body and "sign up" in body:
             return False
@@ -128,41 +132,51 @@ def run_safe_batch(context):
     return uploaded, unresolved
 
 
+def attached_loop(p):
+    if not wait_for_cdp():
+        base.log("GUI_SHARED_CHECKER_WAIT cdp_not_ready retrying")
+        return
+    browser = p.chromium.connect_over_cdp(CDP_URL)
+    if not browser.contexts:
+        base.log("GUI_SHARED_CHECKER_WAIT no_browser_context retrying")
+        return
+    context = browser.contexts[0]
+    base.log("GUI_SHARED_CHECKER_ATTACHED authenticated_profile_context=shared")
+
+    while browser.is_connected():
+        try:
+            command = base.api_get("/api/verifier/command")
+            if command.get("command") == "run":
+                token = str(command.get("run_token") or "")
+                base.log(f"GUI_SHARED_TEST_RUN token={token[:8]}")
+                try:
+                    uploaded, unresolved = run_safe_batch(context)
+                    base.log(
+                        f"GUI_SHARED_TEST_FINISHED uploaded={uploaded} unresolved={unresolved} "
+                        "complete_suppressed=yes apify_handoff=blocked"
+                    )
+                except Exception as exc:
+                    traceback.print_exc()
+                    base.log(f"GUI_SHARED_TEST_ERROR {type(exc).__name__}: {exc}")
+                # Test mode intentionally never completes the main run, so no
+                # unresolved creator can be handed to Apify.
+                time.sleep(30)
+        except Exception as exc:
+            base.log(f"GUI_SHARED_CHECKER_POLL_ERROR {type(exc).__name__}: {exc}")
+            if not browser.is_connected():
+                break
+        time.sleep(base.POLL_SECONDS)
+
+
 def main():
     base.log("GUI_SHARED_CHECKER_START cdp=9222 three_link_test=yes apify_handoff=blocked")
-    if not wait_for_cdp():
-        base.log("GUI_SHARED_CHECKER_FATAL cdp_not_ready")
-        return
-
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(CDP_URL)
-        if not browser.contexts:
-            base.log("GUI_SHARED_CHECKER_FATAL no_browser_context")
-            return
-        context = browser.contexts[0]
-        base.log("GUI_SHARED_CHECKER_ATTACHED authenticated_profile_context=shared")
-
         while True:
             try:
-                command = base.api_get("/api/verifier/command")
-                if command.get("command") == "run":
-                    token = str(command.get("run_token") or "")
-                    base.log(f"GUI_SHARED_TEST_RUN token={token[:8]}")
-                    try:
-                        uploaded, unresolved = run_safe_batch(context)
-                        base.log(
-                            f"GUI_SHARED_TEST_FINISHED uploaded={uploaded} unresolved={unresolved} "
-                            "complete_suppressed=yes apify_handoff=blocked"
-                        )
-                    except Exception as exc:
-                        traceback.print_exc()
-                        base.log(f"GUI_SHARED_TEST_ERROR {type(exc).__name__}: {exc}")
-                    # Intentionally DO NOT call /api/verifier/complete in test mode.
-                    # This guarantees the main service cannot hand unresolved creators to Apify.
-                    time.sleep(30)
+                attached_loop(p)
             except Exception as exc:
-                base.log(f"GUI_SHARED_CHECKER_POLL_ERROR {type(exc).__name__}: {exc}")
-            time.sleep(base.POLL_SECONDS)
+                base.log(f"GUI_SHARED_CHECKER_RECONNECT {type(exc).__name__}: {exc}")
+            time.sleep(3)
 
 
 if __name__ == "__main__":
