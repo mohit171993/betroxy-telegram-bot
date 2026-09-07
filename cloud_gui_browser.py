@@ -3,7 +3,7 @@ import subprocess
 import time
 from pathlib import Path
 
-PROFILE_DIR = "/data/betroxy_chrome_profile_v2"
+PROFILE_DIR = "/data/betroxy_chrome_profile_v3"
 CHROME = "/usr/bin/google-chrome-stable"
 
 
@@ -21,17 +21,17 @@ def clear_stale_profile_locks():
 
 
 def chrome_args():
-    # Railway containers do not provide a usable Chrome kernel sandbox.  Running
-    # as an unprivileged desktop user plus --no-sandbox is the stable container
-    # configuration. --test-type suppresses Chrome's unsupported-flag banner.
+    # Railway's container runtime does not expose the kernel features Chrome's
+    # Linux sandbox needs, so --no-sandbox is required for a stable headful
+    # browser here. Chrome itself is still run as an unprivileged desktop user.
+    # No Playwright launch flags or webdriver automation flags are used.
     return [
         CHROME,
         "--no-sandbox",
-        "--test-type",
         "--disable-dev-shm-usage",
         "--password-store=basic",
         "--start-maximized",
-        "--window-size=1365,900",
+        "--window-size=1368,900",
         "--autoplay-policy=no-user-gesture-required",
         "--remote-debugging-address=127.0.0.1",
         "--remote-debugging-port=9222",
@@ -47,6 +47,7 @@ def main():
     os.environ.setdefault("DISPLAY", ":99")
     os.environ.setdefault("HOME", "/home/browser")
     os.environ.setdefault("TZ", "Asia/Dubai")
+    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
     os.makedirs(PROFILE_DIR, exist_ok=True)
 
     restart_count = 0
@@ -54,15 +55,14 @@ def main():
         clear_stale_profile_locks()
         print(
             f"GUI_GOOGLE_CHROME_STARTING restart={restart_count} "
-            f"profile={PROFILE_DIR} automation_launch=false media=google_chrome",
+            f"profile={PROFILE_DIR} automation_launch=false media=google_chrome manual_first=yes",
             flush=True,
         )
         proc = subprocess.Popen(chrome_args(), env=os.environ.copy())
         code = proc.wait()
         restart_count += 1
         print(f"GUI_GOOGLE_CHROME_EXIT code={code} restart={restart_count}", flush=True)
-        # Never leave the VNC desktop without a browser.  Short delay also avoids
-        # a tight crash loop if Chrome is temporarily unable to initialize.
+        # Keep the visible desktop usable even if Chrome exits unexpectedly.
         time.sleep(3)
 
 
