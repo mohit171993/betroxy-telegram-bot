@@ -23,7 +23,6 @@ def _needs_fallback(value):
         return False
     if s in UNRESOLVED_STATUSES:
         return True
-    # Unknown/custom non-final browser states are treated as unresolved.
     return True
 
 
@@ -56,7 +55,6 @@ def _v27_hybrid_pending_targets():
     return out
 
 
-# Replace the original selector used by run_apify_fallback_for_pending().
 bot._hybrid_pending_targets = _v27_hybrid_pending_targets
 
 
@@ -64,7 +62,10 @@ def _all_browser_results_received_for_current_run():
     """Return True once every active Instagram creator posted a result after this run was requested."""
     control = bot.get_local_verifier_control() or {}
     requested_at = control.get("requested_at")
-    if not requested_at or str(control.get("status") or "") != "running":
+    state = str(control.get("status") or "")
+    # Older/current Windows V35 listeners fetch /targets directly and may never
+    # claim /api/verifier/command, so the server can legitimately remain 'requested'.
+    if not requested_at or state not in {"requested", "running"}:
         return False
 
     with bot.get_db() as conn:
@@ -106,15 +107,13 @@ def _start_fallback_if_browser_batch_complete():
                     UPDATE verifier_control
                     SET status='apify_fallback',
                         result_summary=COALESCE(result_summary,'') || ' | Browser batch complete (server detected)'
-                    WHERE id=1 AND status='running'
+                    WHERE id=1 AND status IN ('requested','running')
                     RETURNING run_token
                     """
                 )
                 row = cur.fetchone()
             conn.commit()
 
-        # Multiple result requests can finish almost together. Only the one that
-        # wins the atomic UPDATE starts the paid fallback thread.
         if not row or not row.get("run_token"):
             return
 
@@ -131,11 +130,6 @@ def _start_fallback_if_browser_batch_complete():
 
 
 def _patch_verifier_result_endpoint():
-    """
-    The Windows listener used by older V35 builds can upload every result but
-    sometimes never call /api/verifier/complete. Wrap the result endpoint so the
-    server itself detects the final browser result and starts fallback reliably.
-    """
     endpoint = "verifier_result"
     original = bot.tracker_api.view_functions.get(endpoint)
     if not original or getattr(original, "_v27_auto_complete_wrapped", False):
@@ -144,8 +138,6 @@ def _patch_verifier_result_endpoint():
     def wrapped_verifier_result(*args, **kwargs):
         response = original(*args, **kwargs)
         try:
-            # Run completion detection only after the original endpoint successfully
-            # stores the browser result. Flask handlers may return response or tuple.
             status_code = 200
             if isinstance(response, tuple) and len(response) >= 2:
                 status_code = int(response[1])
@@ -159,7 +151,7 @@ def _patch_verifier_result_endpoint():
 
     wrapped_verifier_result._v27_auto_complete_wrapped = True
     bot.tracker_api.view_functions[endpoint] = wrapped_verifier_result
-    bot.logger.warning("SMART_CHECKER_SERVER_AUTO_COMPLETE_PATCH_ACTIVE")
+    bot.logger.warning("SMART_CHECKER_SERVER_AUTO_COMPLETE_PATCH_V2_ACTIVE")
 
 
 def _compact_progress():
@@ -214,7 +206,6 @@ def _compact_progress():
         head = f"\n\n<b>Live progress:</b> {completed}/{total} clear"
         if not lines:
             return head + "\nNo active Instagram links."
-        # Keep Telegram message safely under the limit.
         body = "\n".join(lines[:35])
         if len(lines) > 35:
             body += f"\n… +{len(lines)-35} more"
@@ -225,7 +216,6 @@ def _compact_progress():
 
 
 def _patch_status_renderers():
-    # Locate the existing Smart Checker status function without depending on its name.
     for name, fn in list(vars(bot).items()):
         if not callable(fn) or getattr(fn, "__module__", None) != "bot":
             continue
