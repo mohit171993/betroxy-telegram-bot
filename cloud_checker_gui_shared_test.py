@@ -27,7 +27,21 @@ def wait_for_cdp(timeout=300):
     return False
 
 
+def has_session_cookie(context):
+    try:
+        cookies = context.cookies("https://www.instagram.com/")
+        return any(c.get("name") == "sessionid" and c.get("value") for c in cookies)
+    except Exception:
+        return False
+
+
 def logged_in(context):
+    # The login gate only starts this checker after Chrome has persisted a
+    # sessionid cookie. Reconfirm it here, then make one normal navigation to
+    # catch a server-side invalidation/challenge before checking campaign pages.
+    if not has_session_cookie(context):
+        return False
+
     page = context.new_page()
     try:
         page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=45000)
@@ -38,15 +52,19 @@ def logged_in(context):
             body = (page.locator("body").inner_text(timeout=3000) or "").lower()
         except Exception:
             pass
-        if "/accounts/login" in url or "/auth_platform/" in url:
+
+        blocked_markers = (
+            "/accounts/login",
+            "/auth_platform/",
+            "/challenge/",
+        )
+        if any(x in url for x in blocked_markers):
             return False
         if "try another device to continue" in body:
             return False
         if "the login information you entered is incorrect" in body:
             return False
-        if "log in" in body and "sign up" in body:
-            return False
-        return True
+        return has_session_cookie(context)
     finally:
         page.close()
 
