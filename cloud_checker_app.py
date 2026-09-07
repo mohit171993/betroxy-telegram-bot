@@ -4,7 +4,6 @@ import time
 import traceback
 
 import psycopg
-import requests
 from flask import Flask, request, Response
 from playwright.sync_api import sync_playwright
 
@@ -82,41 +81,21 @@ def verify_session(sessionid):
             "sameSite": "Lax",
         }])
         page = context.new_page()
-        page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(3500)
-        logged_out = checker.page_logged_out(page)
-        browser.close()
-    return not logged_out
-
-
-def login_with_credentials(username, password):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-        context = browser.new_context(viewport={"width": 1280, "height": 900})
-        page = context.new_page()
-        page.goto("https://www.instagram.com/accounts/login/", wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(2500)
-        page.locator('input[name="username"]').fill(username)
-        page.locator('input[name="password"]').fill(password)
-        page.locator('button[type="submit"]').click()
-        page.wait_for_timeout(8000)
-        cookies = context.cookies()
-        current_url = page.url
-        body = ""
+        page.goto("https://www.instagram.com/accounts/edit/", wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(4500)
+        current_url = (page.url or "").lower()
         try:
-            body = (page.locator("body").inner_text(timeout=3000) or "")[:3000]
+            body = (page.locator("body").inner_text(timeout=4000) or "").lower()
         except Exception:
-            pass
+            body = ""
+        cookies = context.cookies("https://www.instagram.com/")
         browser.close()
 
-    for c in cookies:
-        if c.get("name") == "sessionid" and c.get("value"):
-            return c["value"], "Login successful"
-
-    lower = body.lower()
-    if "security code" in lower or "confirmation code" in lower or "two-factor" in lower or "challenge" in current_url.lower():
-        return "", "Instagram requires a security/2FA challenge. Complete login in your normal browser, then use the sessionid fallback below."
-    return "", "Instagram did not return a logged-in session. Check the username/password or complete any Instagram challenge first."
+    still_has_session = any(c.get("name") == "sessionid" and c.get("value") for c in cookies)
+    redirected_to_login = "/accounts/login" in current_url
+    login_page_text = "log in" in body and "sign up" in body
+    challenge = "/challenge" in current_url or "security code" in body or "confirm it's you" in body
+    return still_has_session and not redirected_to_login and not login_page_text and not challenge
 
 
 def html_page(message="", ok=False):
@@ -126,29 +105,22 @@ def html_page(message="", ok=False):
 <title>BETROXY Instagram Cloud Checker Setup</title>
 <style>
 body{{font-family:Arial,sans-serif;background:#0c1512;color:#eef8f1;margin:0;padding:24px}}
-.card{{max-width:620px;margin:30px auto;background:#13231d;border:1px solid #2e5143;border-radius:16px;padding:24px}}
+.card{{max-width:680px;margin:30px auto;background:#13231d;border:1px solid #2e5143;border-radius:16px;padding:24px}}
 h1{{margin-top:0}} input{{width:100%;box-sizing:border-box;padding:12px;margin:7px 0 14px;border-radius:9px;border:1px solid #456b5a;background:#0c1512;color:white}}
 button{{padding:12px 18px;border:0;border-radius:9px;background:#43d17a;color:#06110a;font-weight:700;cursor:pointer}}
-.small{{font-size:13px;color:#b7c9bf;line-height:1.5}} .status{{padding:12px;border-radius:9px;background:#0f1d18;margin-bottom:16px}}
-a{{color:#76e6a2}}
+.small{{font-size:13px;color:#b7c9bf;line-height:1.55}} .status{{padding:12px;border-radius:9px;background:#0f1d18;margin-bottom:16px}}
+code{{background:#0c1512;padding:2px 5px;border-radius:4px}} a{{color:#76e6a2}}
 </style></head><body><div class='card'>
 <h1>BETROXY Instagram Cloud Checker</h1>
 {f"<div class='status'>{status}</div>" if status else ""}
-<p>Log into the spare Instagram account used by the checker. Your password is used only for this login attempt and is not stored.</p>
-<form method='post' action='/login'>
-<input type='hidden' name='token' value='{LOGIN_SETUP_TOKEN}'>
-<label>Instagram username</label><input name='username' autocomplete='username' required>
-<label>Instagram password</label><input name='password' type='password' autocomplete='current-password' required>
-<button type='submit'>Log in and save session</button>
-</form>
-<hr style='border-color:#2e5143;margin:28px 0'>
-<p><b>If Instagram asks for 2FA/challenge:</b> log in normally at <a href='https://www.instagram.com/' target='_blank'>instagram.com</a>, then paste the <code>sessionid</code> cookie below.</p>
+<p><b>One-time setup:</b> log into the spare Instagram account normally in Chrome, then paste its <code>sessionid</code> cookie below. This avoids Instagram blocking automated login forms.</p>
 <form method='post' action='/session'>
 <input type='hidden' name='token' value='{LOGIN_SETUP_TOKEN}'>
-<label>Instagram sessionid</label><input name='sessionid' type='password' required>
+<label>Instagram sessionid</label><input name='sessionid' type='password' autocomplete='off' required>
 <button type='submit'>Verify and save session</button>
 </form>
-<p class='small'>The saved session is stored in the project database so it survives Railway redeployments. You can close this page after it confirms success.</p>
+<p class='small'>How to get it in Chrome: open instagram.com while logged in → press F12 → Application → Cookies → https://www.instagram.com → find <code>sessionid</code> → copy only its Value. Do not send that value in chat; paste it directly into this protected page.</p>
+<p class='small'>The session is verified against Instagram and then stored in the project database so it survives Railway redeployments.</p>
 </div></body></html>"""
 
 
@@ -161,24 +133,7 @@ def root():
     if not authorized(request):
         return Response("Not found", status=404)
     existing = bool(load_session())
-    return html_page("A saved Instagram session already exists." if existing else "Cloud checker is waiting for Instagram login.", existing)
-
-
-@app.post("/login")
-def login_route():
-    if not authorized(request):
-        return Response("Not found", status=404)
-    username = (request.form.get("username") or "").strip()
-    password = request.form.get("password") or ""
-    try:
-        sessionid, msg = login_with_credentials(username, password)
-        if sessionid:
-            save_session(sessionid)
-            return html_page("Instagram login verified and session saved. Cloud checker is ready.", True)
-        return html_page(msg, False)
-    except Exception as exc:
-        traceback.print_exc()
-        return html_page(f"Login attempt failed: {type(exc).__name__}: {exc}", False)
+    return html_page("A saved Instagram session already exists." if existing else "Cloud checker is waiting for Instagram session setup.", existing)
 
 
 @app.post("/session")
@@ -188,7 +143,7 @@ def session_route():
     sessionid = (request.form.get("sessionid") or "").strip()
     try:
         if not verify_session(sessionid):
-            return html_page("That sessionid did not produce a logged-in Instagram session.", False)
+            return html_page("That sessionid was not accepted as a logged-in Instagram session. Make sure you copied only the sessionid Value from a currently logged-in Instagram tab.", False)
         save_session(sessionid)
         return html_page("Instagram session verified and saved. Cloud checker is ready.", True)
     except Exception as exc:
