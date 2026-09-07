@@ -1,1 +1,1 @@
-worker: python v45_smartcheck_history_bootstrap.py
+worker: python v46_per_url_pixel_bootstrap.py
