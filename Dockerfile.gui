@@ -3,8 +3,9 @@ FROM mcr.microsoft.com/playwright/python:v1.55.0-noble
 WORKDIR /app
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    xvfb x11vnc fluxbox novnc websockify ffmpeg wget ca-certificates util-linux feh dbus-x11 \
-    fonts-liberation fonts-dejavu-core \
+    xvfb x11vnc fluxbox novnc websockify ffmpeg wget ca-certificates util-linux feh \
+    dbus dbus-x11 fonts-liberation fonts-dejavu-core \
+    libgl1-mesa-dri libegl1 libgbm1 mesa-utils \
     && wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/google-chrome.deb \
     && apt-get install -y /tmp/google-chrome.deb \
     && rm -f /tmp/google-chrome.deb \
@@ -16,6 +17,7 @@ RUN pip install --no-cache-dir -r /app/checker_requirements.txt
 
 COPY cloud_checker_worker.py /app/cloud_checker_worker.py
 COPY cloud_gui_browser.py /app/cloud_gui_browser.py
+COPY cloud_login_gate.py /app/cloud_login_gate.py
 COPY cloud_checker_gui_shared_test.py /app/cloud_checker_gui_shared_test.py
 COPY start_gui.sh /app/start_gui.sh
 RUN chmod +x /app/start_gui.sh
@@ -23,5 +25,7 @@ RUN chmod +x /app/start_gui.sh
 ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
 ENV TZ=Asia/Dubai
+ENV LIBGL_ALWAYS_SOFTWARE=1
+ENV CHROME_PROFILE_DIR=/data/betroxy_chrome_profile_v3
 
 CMD ["/app/start_gui.sh"]
