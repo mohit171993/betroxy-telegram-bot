@@ -1,8 +1,10 @@
 import re
 import bot
+import v27_runner  # activates smart-checker Apify fallback + live progress patches
 
 print("PATCH_RUNNER_BULK_FIX_V2_ACTIVE", flush=True)
 bot.logger.warning("PATCH_RUNNER_BULK_FIX_V2_ACTIVE")
+bot.logger.warning("SMART_CHECKER_PATCH_LOADED_FROM_V27_RUNNER")
 
 
 def _split_items(raw):
