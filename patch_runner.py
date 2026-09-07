@@ -1,6 +1,9 @@
 import re
 import bot
 
+print("PATCH_RUNNER_BULK_FIX_V2_ACTIVE", flush=True)
+bot.logger.warning("PATCH_RUNNER_BULK_FIX_V2_ACTIVE")
+
 
 def _split_items(raw):
     """Return unique campaign inputs from multiline/whitespace-pasted Telegram text."""
@@ -8,17 +11,15 @@ def _split_items(raw):
     if not raw:
         return []
 
-    # Prefer one-item-per-line, but also handle clients that collapse line breaks.
-    parts = [x.strip() for x in raw.splitlines() if x.strip()]
-    if len(parts) <= 1:
-        urls = re.findall(r"https?://[^\s]+", raw, flags=re.I)
-        if len(urls) > 1:
-            parts = urls
+    # Extract URLs anywhere in the message first. This is more reliable than
+    # relying on Telegram line breaks because some clients collapse/rewrap text.
+    urls = re.findall(r"https?://[^\s]+", raw, flags=re.I)
+    parts = urls if urls else [x.strip() for x in raw.splitlines() if x.strip()]
 
     out = []
     seen = set()
     for item in parts:
-        item = item.strip().rstrip(",;")
+        item = item.strip().rstrip(",;.)]")
         key = item.lower()
         if item and key not in seen:
             seen.add(key)
@@ -31,6 +32,7 @@ async def _bulk_create(update):
         return bot.ConversationHandler.END
 
     items = _split_items(update.message.text or "")
+    bot.logger.warning("BULK_CREATE_V2 items=%s", len(items))
     created_rows, existing_rows, failed = [], [], []
 
     for item in items:
@@ -51,24 +53,11 @@ async def _bulk_create(update):
 
     for row in created_rows[:25]:
         landing, _ = bot.creator_urls(row)
-        lines.append(
-            f"\n✅ @{bot.html.escape(str(row['instagram_username']))}\n"
-            f"<code>{bot.html.escape(landing)}</code>"
-        )
-
+        lines.append(f"\n✅ @{bot.html.escape(str(row['instagram_username']))}\n<code>{bot.html.escape(landing)}</code>")
     for row in existing_rows[:10]:
         lines.append(f"\nℹ️ Already existed: @{bot.html.escape(str(row['instagram_username']))}")
-
     for item, error in failed[:10]:
-        lines.append(
-            f"\n❌ <code>{bot.html.escape(item[:180])}</code>\n"
-            f"{bot.html.escape(error[:220])}"
-        )
-
-    if len(created_rows) > 25:
-        lines.append(f"\n…and {len(created_rows) - 25} more created.")
-    if len(failed) > 10:
-        lines.append(f"\n…and {len(failed) - 10} more failures.")
+        lines.append(f"\n❌ <code>{bot.html.escape(item[:180])}</code>\n{bot.html.escape(error[:220])}")
 
     await update.message.reply_text(
         "\n".join(lines),
@@ -83,8 +72,6 @@ _original_single_save = bot.campaign_add_single_save
 
 
 async def patched_campaign_add_single_save(update, context):
-    # A stale single-create ConversationHandler can intercept a multiline bulk paste.
-    # Detect that case and do the correct bulk operation instead of creating only item #1.
     items = _split_items(update.message.text or "")
     if len(items) > 1:
         return await _bulk_create(update)
@@ -100,9 +87,8 @@ async def patched_campaign_disable_by_link_save(update, context):
         return bot.ConversationHandler.END
 
     items = _split_items(update.message.text or "")
-    disabled = []
-    already_disabled = []
-    failed = []
+    bot.logger.warning("BULK_DISABLE_V2 items=%s", len(items))
+    disabled, already_disabled, failed = [], [], []
 
     for item in items:
         try:
@@ -129,16 +115,12 @@ async def patched_campaign_disable_by_link_save(update, context):
         f"Already disabled: <b>{len(already_disabled)}</b>",
         f"Failed: <b>{len(failed)}</b>",
     ]
-
     for row in disabled[:30]:
         lines.append(f"\n✅ @{bot.html.escape(str(row['instagram_username']))}")
     for row in already_disabled[:10]:
         lines.append(f"\nℹ️ Already disabled: @{bot.html.escape(str(row['instagram_username']))}")
     for item, error in failed[:10]:
-        lines.append(
-            f"\n❌ <code>{bot.html.escape(item[:180])}</code> — "
-            f"{bot.html.escape(error[:220])}"
-        )
+        lines.append(f"\n❌ <code>{bot.html.escape(item[:180])}</code> — {bot.html.escape(error[:220])}")
 
     await update.message.reply_text(
         "\n".join(lines),
@@ -154,6 +136,12 @@ bot.campaign_add_single_save = patched_campaign_add_single_save
 bot.campaign_add_bulk_save = patched_campaign_add_bulk_save
 bot.campaign_disable_by_link_save = patched_campaign_disable_by_link_save
 
+bot.logger.warning(
+    "PATCH_BINDINGS create=%s bulk=%s disable=%s",
+    bot.campaign_add_single_save.__name__,
+    bot.campaign_add_bulk_save.__name__,
+    bot.campaign_disable_by_link_save.__name__,
+)
 
 if __name__ == "__main__":
     bot.main()
