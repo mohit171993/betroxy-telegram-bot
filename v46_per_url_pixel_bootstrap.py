@@ -111,7 +111,7 @@ def v46_campaign_edit_menu(code):
                 bot.InlineKeyboardButton('🏷 Source', callback_data=f'campaign_edit_source:{code}'),
             ],
             [
-                bot.InlineKeyboardButton(pixel_label, callback_data=f'campaign_edit_username:pixel|{code}'),
+                bot.InlineKeyboardButton(pixel_label, callback_data=f'campaign_edit_username:~{code}'),
             ],
             [bot.InlineKeyboardButton('⬅️ Creator', callback_data=f'campaign_creator:{code}')],
             [bot.InlineKeyboardButton('🏠 Campaign Tracker', callback_data='campaign_home')],
@@ -124,14 +124,14 @@ async def v46_campaign_edit_username_start(update, context):
     data = q.data or ''
     value = data.split(':', 1)[1] if ':' in data else ''
 
-    if not value.startswith('pixel|'):
+    if not value.startswith('~'):
         return await _original_username_start(update, context)
 
     await q.answer()
     if not bot.is_admin(q.from_user.id):
         return bot.ConversationHandler.END
 
-    code = value.split('|', 1)[1]
+    code = value[1:]
     row = bot.campaign_link_by_code(code)
     if not row:
         await q.message.reply_text('❌ Creator link not found.', reply_markup=bot.campaign_menu())
