@@ -7,17 +7,21 @@ bot.logger.warning("PATCH_RUNNER_BULK_FIX_V2_ACTIVE")
 bot.logger.warning("SMART_CHECKER_PATCH_LOADED_FROM_V27_RUNNER")
 
 # TEMPORARY SMART-CHECK TEST SET.
-# Two creators had Story UNKNOWN and one had a clear LIVE/OK Story result.
-# This lets us validate that Apify runs only for unresolved fields.
-SMART_TEST_HANDLES = {
-    "arcbian_akashh",
-    "cricxcrratee",
-    "mumbai_indians_ipl_status",
-}
+# Prefer two creators whose Story result was unresolved and one clear LIVE result.
+SMART_TEST_PATTERNS = (
+    "arcbian",
+    "cricx",
+    "mumbai_indians",
+)
+
+
+def _smart_test_match_username(value):
+    username = str(value or "").strip().lstrip("@").lower()
+    return any(p in username for p in SMART_TEST_PATTERNS)
 
 
 def _is_smart_test_handle(row):
-    return str(row.get("instagram_username") or "").strip().lstrip("@").lower() in SMART_TEST_HANDLES
+    return _smart_test_match_username(row.get("instagram_username"))
 
 
 # Limit /api/verifier/targets to the 3 diagnostic creators.
@@ -28,12 +32,37 @@ if _original_verifier_targets and not getattr(_original_verifier_targets, "_smar
         try:
             data = response.get_json() or {}
             targets = data.get("targets") or []
-            data["targets"] = [
-                t for t in targets
-                if str(t.get("username") or "").strip().lstrip("@").lower() in SMART_TEST_HANDLES
-            ]
+            selected = [t for t in targets if _smart_test_match_username(t.get("username"))]
+
+            # Keep at most one match for each diagnostic pattern and no more than 3 total.
+            deduped = []
+            seen = set()
+            for pattern in SMART_TEST_PATTERNS:
+                for t in selected:
+                    u = str(t.get("username") or "").strip().lstrip("@").lower()
+                    if pattern in u and u not in seen:
+                        deduped.append(t)
+                        seen.add(u)
+                        break
+
+            # Diagnostic safety: never return an empty test set. If historical usernames
+            # changed, return the first 3 active Instagram targets so the Windows checker
+            # can still be tested instead of finishing with Results uploaded=0.
+            if not deduped:
+                deduped = targets[:3]
+                bot.logger.warning(
+                    "SMART_TEST preferred handles not found; fallback usernames=%s",
+                    [str(t.get("username") or "") for t in deduped],
+                )
+
+            data["targets"] = deduped[:3]
             data["test_mode"] = True
             data["test_target_count"] = len(data["targets"])
+            bot.logger.warning(
+                "SMART_TEST targets returned=%s usernames=%s",
+                len(data["targets"]),
+                [str(t.get("username") or "") for t in data["targets"]],
+            )
             return bot.jsonify(data)
         except Exception:
             bot.logger.exception("SMART_TEST target filtering failed")
@@ -41,10 +70,10 @@ if _original_verifier_targets and not getattr(_original_verifier_targets, "_smar
 
     _smart_test_verifier_targets._smart_test_wrapped = True
     bot.tracker_api.view_functions["verifier_targets"] = _smart_test_verifier_targets
-    bot.logger.warning("SMART_CHECKER_TEST_MODE_ACTIVE handles=%s", sorted(SMART_TEST_HANDLES))
+    bot.logger.warning("SMART_CHECKER_TEST_MODE_ACTIVE patterns=%s", SMART_TEST_PATTERNS)
 
 
-# Make completion detection wait only for the same 3 test creators.
+# Make completion detection wait only for the same test creators.
 def _smart_test_all_browser_results_received():
     control = bot.get_local_verifier_control() or {}
     requested_at = control.get("requested_at")
@@ -63,12 +92,15 @@ def _smart_test_all_browser_results_received():
                 ORDER BY id
                 """
             )
-            links = [r for r in cur.fetchall() if _is_smart_test_handle(r)]
+            all_links = cur.fetchall()
+            links = [r for r in all_links if _is_smart_test_handle(r)]
+            if not links:
+                links = all_links[:3]
 
     if not links:
         return False
 
-    for cl in links:
+    for cl in links[:3]:
         day = bot.current_campaign_day(cl)
         v = bot.get_verification_row(cl["id"], day) or {}
         checked_at = v.get("auto_checked_at")
@@ -81,11 +113,14 @@ def _smart_test_all_browser_results_received():
 v27_runner._all_browser_results_received_for_current_run = _smart_test_all_browser_results_received
 
 
-# Restrict paid fallback to the exact same test creators.
+# Restrict paid fallback to the exact same diagnostic set.
 _original_hybrid_pending_targets = bot._hybrid_pending_targets
 
 def _smart_test_hybrid_pending_targets():
-    return [x for x in _original_hybrid_pending_targets() if _is_smart_test_handle(x[0])]
+    rows = [x for x in _original_hybrid_pending_targets() if _is_smart_test_handle(x[0])]
+    if rows:
+        return rows[:3]
+    return _original_hybrid_pending_targets()[:3]
 
 bot._hybrid_pending_targets = _smart_test_hybrid_pending_targets
 
@@ -96,8 +131,6 @@ def _split_items(raw):
     if not raw:
         return []
 
-    # Extract URLs anywhere in the message first. This is more reliable than
-    # relying on Telegram line breaks because some clients collapse/rewrap text.
     urls = re.findall(r"https?://[^\s]+", raw, flags=re.I)
     parts = urls if urls else [x.strip() for x in raw.splitlines() if x.strip()]
 
@@ -216,7 +249,6 @@ async def patched_campaign_disable_by_link_save(update, context):
     return bot.ConversationHandler.END
 
 
-# Apply fixes before bot.main() constructs its ConversationHandlers.
 bot.campaign_add_single_save = patched_campaign_add_single_save
 bot.campaign_add_bulk_save = patched_campaign_add_bulk_save
 bot.campaign_disable_by_link_save = patched_campaign_disable_by_link_save
