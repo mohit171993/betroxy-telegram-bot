@@ -1,1 +1,1 @@
-worker: python v46_per_url_pixel_bootstrap.py
+worker: python v47_pixel_manager_menu_bootstrap.py
