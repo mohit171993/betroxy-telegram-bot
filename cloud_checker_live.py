@@ -1,5 +1,6 @@
 import html
 import os
+import queue
 import threading
 import time
 import traceback
@@ -12,6 +13,7 @@ from cloud_checker_app import app, init_session_table, load_session, PORT
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID = os.getenv("ADMIN_ID", "").strip()
+WORKER_COUNT = 3
 
 
 def tg_send(text):
@@ -104,193 +106,280 @@ def final_result(payload):
     return "🟢 PASS"
 
 
-def progress_text(total, done, username="", stage="Starting", payload=None, elapsed=0, counts=None):
-    payload = payload or {}
-    counts = counts or {"pass": 0, "fix": 0, "review": 0}
-    name = f"@{html.escape(str(username))}" if username else "—"
-    return (
-        "⚙️ <b>BETROXY Cloud Checker</b>\n\n"
-        f"Progress: <b>{done}/{total}</b>  <code>{progress_bar(done, total)}</code>\n"
-        f"Current: <b>{name}</b>\n"
-        f"Stage: <b>{html.escape(stage)}</b>\n"
-        f"Elapsed: <b>{int(elapsed)} sec</b>\n\n"
-        f"Bio: <b>{status_word(payload.get('bio_status'))}</b>\n"
-        f"Extra: <b>{status_word(payload.get('only_status'), 'only')}</b>\n"
-        f"Story: <b>{status_word(payload.get('story_status'), 'story')}</b>\n"
-        f"Story Link: <b>{status_word(payload.get('story_link_status'))}</b>\n\n"
-        f"🟢 PASS: <b>{counts.get('pass', 0)}</b>   "
-        f"🔴 FIX: <b>{counts.get('fix', 0)}</b>   "
-        f"🟡 REVIEW: <b>{counts.get('review', 0)}</b>"
-    )
+def _worker_line(worker_id, info):
+    info = info or {}
+    username = info.get("username")
+    if not username:
+        return f"Worker {worker_id}: <b>Waiting</b>"
+    stage = html.escape(str(info.get("stage") or "Checking"))
+    return f"Worker {worker_id}: <b>@{html.escape(str(username))}</b> — {stage}"
 
 
-def run_batch_live(browser):
-    targets = checker.api_get("/api/verifier/targets").get("targets") or []
-    targets = [x for x in targets if x.get("source_type") == "instagram"]
-    total = len(targets)
-    checker.log(f"CLOUD_CHECKER targets={total} usernames={[x.get('username') for x in targets]}")
+def progress_text(total, state, started):
+    with state["lock"]:
+        done = state["done"]
+        counts = dict(state["counts"])
+        workers = {k: dict(v) for k, v in state["workers"].items()}
+    lines = [
+        "⚙️ <b>BETROXY Cloud Checker — 3 Workers</b>",
+        "",
+        f"Progress: <b>{done}/{total}</b>  <code>{progress_bar(done, total)}</code>",
+        f"Elapsed: <b>{int(time.time() - started)} sec</b>",
+        "",
+        _worker_line(1, workers.get(1)),
+        _worker_line(2, workers.get(2)),
+        _worker_line(3, workers.get(3)),
+        "",
+        f"🟢 PASS: <b>{counts.get('pass', 0)}</b>   🔴 FIX: <b>{counts.get('fix', 0)}</b>   🟡 REVIEW: <b>{counts.get('review', 0)}</b>",
+    ]
+    return "\n".join(lines)
 
-    started = time.time()
-    counts = {"pass": 0, "fix": 0, "review": 0}
-    message_id = tg_send(progress_text(total, 0, stage="Starting cloud browser", elapsed=0, counts=counts))
 
+def _maybe_update_progress(message_id, total, state, started, force=False):
+    if not message_id:
+        return
+    with state["edit_lock"]:
+        now = time.time()
+        if not force and now - state.get("last_edit", 0) < 0.9:
+            return
+        state["last_edit"] = now
+        tg_edit(message_id, progress_text(total, state, started))
+
+
+def _new_context(browser, sessionid):
     context = browser.new_context(viewport={"width": 1280, "height": 900})
-    if checker.IG_SESSIONID:
+    if sessionid:
         context.add_cookies([{
             "name": "sessionid",
-            "value": checker.IG_SESSIONID,
+            "value": sessionid,
             "domain": ".instagram.com",
             "path": "/",
             "httpOnly": True,
             "secure": True,
             "sameSite": "Lax",
         }])
+    return context
 
-    uploaded = 0
-    unresolved = 0
+
+def _check_one(context, t, worker_id, total, state, started, message_id):
+    username = t["username"]
+    assigned = t["assigned_url"]
+    payload = {
+        "campaign_link_id": t["campaign_link_id"],
+        "campaign_day": t["campaign_day"],
+        "auto_status": "checked",
+        "bio_status": None,
+        "only_status": None,
+        "story_status": None,
+        "story_link_status": None,
+        "detected_bio_links": [],
+        "story_count": 0,
+    }
+    details = []
+
+    with state["lock"]:
+        state["workers"][worker_id] = {"username": username, "stage": "Profile"}
+    _maybe_update_progress(message_id, total, state, started)
+
+    p = context.new_page()
     try:
-        for idx, t in enumerate(targets, 1):
-            username = t["username"]
-            assigned = t["assigned_url"]
-            checker.log(f"CLOUD_CHECKER {idx}/{total} @{username}")
-            payload = {
-                "campaign_link_id": t["campaign_link_id"],
-                "campaign_day": t["campaign_day"],
-                "auto_status": "checked",
-                "bio_status": None,
-                "only_status": None,
-                "story_status": None,
-                "story_link_status": None,
-                "detected_bio_links": [],
-                "story_count": 0,
-            }
-            details = []
-
-            tg_edit(
-                message_id,
-                progress_text(total, idx - 1, username, "Checking profile", payload, time.time() - started, counts),
-            )
-
-            p = context.new_page()
-            try:
-                profile = checker.check_profile(p, username, assigned)
-                if profile.get("ok"):
-                    payload["bio_status"] = profile.get("bio_status")
-                    payload["only_status"] = profile.get("only_status")
-                    payload["detected_bio_links"] = profile.get("links") or []
-                else:
-                    payload["auto_status"] = "unknown"
-                details.append(profile.get("detail") or "")
-            except Exception as exc:
-                payload["auto_status"] = "unknown"
-                details.append(f"Profile error: {type(exc).__name__}: {exc}")
-            finally:
-                p.close()
-
-            tg_edit(
-                message_id,
-                progress_text(total, idx - 1, username, "Checking Story (max 2 attempts)", payload, time.time() - started, counts),
-            )
-
-            p = context.new_page()
-            try:
-                story = checker.check_story(p, username, assigned)
-                if story.get("ok"):
-                    payload["story_status"] = story.get("story_status")
-                    payload["story_link_status"] = story.get("story_link_status")
-                    payload["story_count"] = story.get("story_count") or 0
-                details.append(story.get("detail") or "")
-            except Exception as exc:
-                details.append(f"Story error: {type(exc).__name__}: {exc}")
-            finally:
-                p.close()
-
-            payload["detail"] = " ".join(x for x in details if x)[:3900]
-            checker.api_post("/api/verifier/result", payload)
-            uploaded += 1
-
-            result = final_result(payload)
-            if "PASS" in result:
-                counts["pass"] += 1
-            elif "FIX" in result:
-                counts["fix"] += 1
-            else:
-                counts["review"] += 1
-                unresolved += 1
-
-            checker.log(
-                f"CLOUD_CHECKER uploaded @{username} "
-                f"bio={payload['bio_status']} only={payload['only_status']} "
-                f"story={payload['story_status']} story_link={payload['story_link_status']}"
-            )
-
-            tg_edit(
-                message_id,
-                progress_text(total, idx, username, f"Completed creator — {result}", payload, time.time() - started, counts),
-            )
+        profile = checker.check_profile(p, username, assigned)
+        if profile.get("ok"):
+            payload["bio_status"] = profile.get("bio_status")
+            payload["only_status"] = profile.get("only_status")
+            payload["detected_bio_links"] = profile.get("links") or []
+        else:
+            payload["auto_status"] = "unknown"
+        details.append(profile.get("detail") or "")
+    except Exception as exc:
+        payload["auto_status"] = "unknown"
+        details.append(f"Profile error: {type(exc).__name__}: {exc}")
     finally:
-        context.close()
+        p.close()
 
+    with state["lock"]:
+        state["workers"][worker_id] = {"username": username, "stage": "Story (max 2 attempts)"}
+    _maybe_update_progress(message_id, total, state, started)
+
+    p = context.new_page()
+    try:
+        story = checker.check_story(p, username, assigned)
+        if story.get("ok"):
+            payload["story_status"] = story.get("story_status")
+            payload["story_link_status"] = story.get("story_link_status")
+            payload["story_count"] = story.get("story_count") or 0
+        details.append(story.get("detail") or "")
+    except Exception as exc:
+        details.append(f"Story error: {type(exc).__name__}: {exc}")
+    finally:
+        p.close()
+
+    payload["detail"] = " ".join(x for x in details if x)[:3900]
+    checker.api_post("/api/verifier/result", payload)
+
+    vals = [
+        payload.get("bio_status"), payload.get("only_status"),
+        payload.get("story_status"), payload.get("story_link_status")
+    ]
+    unresolved = any(v in {None, "pending"} for v in vals)
+    result = final_result(payload)
+
+    with state["lock"]:
+        state["done"] += 1
+        state["uploaded"] += 1
+        if unresolved:
+            state["unresolved"] += 1
+        if "PASS" in result:
+            state["counts"]["pass"] += 1
+        elif "FIX" in result:
+            state["counts"]["fix"] += 1
+        else:
+            state["counts"]["review"] += 1
+        state["workers"][worker_id] = {"username": username, "stage": f"Done — {result}"}
+        done = state["done"]
+
+    checker.log(
+        f"CLOUD_CHECKER worker={worker_id} done={done}/{total} @{username} "
+        f"bio={payload['bio_status']} only={payload['only_status']} "
+        f"story={payload['story_status']} story_link={payload['story_link_status']}"
+    )
+    _maybe_update_progress(message_id, total, state, started, force=True)
+
+
+def _browser_worker(worker_id, work_q, total, state, started, message_id, sessionid):
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
+            )
+            context = _new_context(browser, sessionid)
+            try:
+                while True:
+                    try:
+                        t = work_q.get_nowait()
+                    except queue.Empty:
+                        break
+                    try:
+                        _check_one(context, t, worker_id, total, state, started, message_id)
+                    except Exception as exc:
+                        checker.log(f"CLOUD_CHECKER_WORKER_ERROR worker={worker_id} {type(exc).__name__}: {exc}")
+                        traceback.print_exc()
+                    finally:
+                        work_q.task_done()
+            finally:
+                context.close()
+                browser.close()
+    finally:
+        with state["lock"]:
+            state["workers"][worker_id] = {"username": "", "stage": "Finished"}
+        _maybe_update_progress(message_id, total, state, started, force=True)
+
+
+def run_batch_parallel(sessionid):
+    targets = checker.api_get("/api/verifier/targets").get("targets") or []
+    targets = [x for x in targets if x.get("source_type") == "instagram"]
+    total = len(targets)
+    checker.log(f"CLOUD_CHECKER_3_WORKERS targets={total} usernames={[x.get('username') for x in targets]}")
+
+    started = time.time()
+    state = {
+        "lock": threading.Lock(),
+        "edit_lock": threading.Lock(),
+        "last_edit": 0.0,
+        "done": 0,
+        "uploaded": 0,
+        "unresolved": 0,
+        "counts": {"pass": 0, "fix": 0, "review": 0},
+        "workers": {
+            1: {"username": "", "stage": "Waiting"},
+            2: {"username": "", "stage": "Waiting"},
+            3: {"username": "", "stage": "Waiting"},
+        },
+    }
+    message_id = tg_send(progress_text(total, state, started))
+
+    if not targets:
+        return 0, 0, message_id, state["counts"], total, started
+
+    work_q = queue.Queue()
+    for t in targets:
+        work_q.put(t)
+
+    threads = []
+    for worker_id in range(1, WORKER_COUNT + 1):
+        th = threading.Thread(
+            target=_browser_worker,
+            args=(worker_id, work_q, total, state, started, message_id, sessionid),
+            daemon=True,
+        )
+        th.start()
+        threads.append(th)
+
+    for th in threads:
+        th.join()
+
+    with state["lock"]:
+        uploaded = state["uploaded"]
+        unresolved = state["unresolved"]
+        counts = dict(state["counts"])
+    _maybe_update_progress(message_id, total, state, started, force=True)
     return uploaded, unresolved, message_id, counts, total, started
 
 
 def worker_loop():
-    checker.log("CLOUD_CHECKER_LIVE_WORKER_START")
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
-        )
-        while True:
-            try:
-                sessionid = load_session()
-                if not sessionid:
-                    checker.log("CLOUD_CHECKER_WAITING_FOR_LOGIN")
-                    time.sleep(checker.POLL_SECONDS)
-                    continue
+    checker.log("CLOUD_CHECKER_LIVE_WORKER_START workers=3 shared_session=yes")
+    while True:
+        try:
+            sessionid = load_session()
+            if not sessionid:
+                checker.log("CLOUD_CHECKER_WAITING_FOR_LOGIN")
+                time.sleep(checker.POLL_SECONDS)
+                continue
 
-                checker.IG_SESSIONID = sessionid
-                command = checker.api_get("/api/verifier/command")
-                if command.get("command") == "run":
-                    token = command.get("run_token")
-                    checker.log(f"CLOUD_CHECKER_RUN token={str(token)[:8]}")
-                    message_id = None
-                    started = time.time()
-                    counts = {"pass": 0, "fix": 0, "review": 0}
-                    total = 0
-                    try:
-                        uploaded, unresolved, message_id, counts, total, started = run_batch_live(browser)
-                        summary = f"cloud checker uploaded={uploaded}, unresolved_creators={unresolved}"
-                    except Exception as exc:
-                        traceback.print_exc()
-                        summary = f"cloud checker failed: {type(exc).__name__}: {exc}"
-                        if message_id:
-                            tg_edit(
-                                message_id,
-                                "❌ <b>BETROXY Cloud Checker failed</b>\n\n"
-                                f"{html.escape(type(exc).__name__)}: {html.escape(str(exc)[:800])}",
-                            )
+            checker.IG_SESSIONID = sessionid
+            command = checker.api_get("/api/verifier/command")
+            if command.get("command") == "run":
+                token = command.get("run_token")
+                checker.log(f"CLOUD_CHECKER_RUN token={str(token)[:8]} workers=3")
+                message_id = None
+                started = time.time()
+                counts = {"pass": 0, "fix": 0, "review": 0}
+                total = 0
+                try:
+                    uploaded, unresolved, message_id, counts, total, started = run_batch_parallel(sessionid)
+                    summary = f"cloud checker uploaded={uploaded}, unresolved_creators={unresolved}, workers=3"
+                except Exception as exc:
+                    traceback.print_exc()
+                    summary = f"cloud checker failed: {type(exc).__name__}: {exc}"
+                    if message_id:
+                        tg_edit(
+                            message_id,
+                            "❌ <b>BETROXY Cloud Checker failed</b>\n\n"
+                            f"{html.escape(type(exc).__name__)}: {html.escape(str(exc)[:800])}",
+                        )
 
-                    try:
-                        checker.api_post("/api/verifier/complete", {"run_token": token, "summary": summary})
-                        checker.log(f"CLOUD_CHECKER_COMPLETE {summary}")
-                        if message_id:
-                            tg_edit(
-                                message_id,
-                                "✅ <b>BETROXY Cloud Browser Stage Complete</b>\n\n"
-                                f"Checked: <b>{total}/{total}</b>  <code>{progress_bar(total, total)}</code>\n"
-                                f"Time: <b>{int(time.time() - started)} sec</b>\n\n"
-                                f"🟢 PASS: <b>{counts.get('pass', 0)}</b>\n"
-                                f"🔴 FIX: <b>{counts.get('fix', 0)}</b>\n"
-                                f"🟡 REVIEW: <b>{counts.get('review', 0)}</b>\n\n"
-                                "☁️ Any unresolved fields now go to <b>Apify fallback</b>.\n"
-                                "Open <b>Campaign Tracker → Auto Report</b> for the merged final result.",
-                            )
-                    except Exception as exc:
-                        checker.log(f"CLOUD_CHECKER_COMPLETE_ERROR {type(exc).__name__}: {exc}")
-            except Exception as exc:
-                checker.log(f"CLOUD_CHECKER_POLL_ERROR {type(exc).__name__}: {exc}")
-            time.sleep(checker.POLL_SECONDS)
+                try:
+                    checker.api_post("/api/verifier/complete", {"run_token": token, "summary": summary})
+                    checker.log(f"CLOUD_CHECKER_COMPLETE {summary}")
+                    if message_id:
+                        tg_edit(
+                            message_id,
+                            "✅ <b>BETROXY Cloud Browser Stage Complete</b>\n\n"
+                            f"Workers: <b>3 parallel</b>\n"
+                            f"Checked: <b>{total}/{total}</b>  <code>{progress_bar(total, total)}</code>\n"
+                            f"Time: <b>{int(time.time() - started)} sec</b>\n\n"
+                            f"🟢 PASS: <b>{counts.get('pass', 0)}</b>\n"
+                            f"🔴 FIX: <b>{counts.get('fix', 0)}</b>\n"
+                            f"🟡 REVIEW: <b>{counts.get('review', 0)}</b>\n\n"
+                            "☁️ Any unresolved fields now go to <b>Apify fallback</b>.\n"
+                            "Open <b>Campaign Tracker → Auto Report</b> for the merged final result.",
+                        )
+                except Exception as exc:
+                    checker.log(f"CLOUD_CHECKER_COMPLETE_ERROR {type(exc).__name__}: {exc}")
+        except Exception as exc:
+            checker.log(f"CLOUD_CHECKER_POLL_ERROR {type(exc).__name__}: {exc}")
+        time.sleep(checker.POLL_SECONDS)
 
 
 if __name__ == "__main__":
