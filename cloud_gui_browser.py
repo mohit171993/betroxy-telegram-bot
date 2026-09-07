@@ -3,6 +3,7 @@ import time
 from playwright.sync_api import sync_playwright
 
 PROFILE_DIR = "/data/betroxy_chrome_profile"
+CHROME = "/usr/bin/google-chrome-stable"
 
 
 def main():
@@ -11,6 +12,7 @@ def main():
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
             PROFILE_DIR,
+            executable_path=CHROME,
             headless=False,
             viewport={"width": 1365, "height": 900},
             args=[
@@ -18,6 +20,7 @@ def main():
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
                 "--start-maximized",
+                "--autoplay-policy=no-user-gesture-required",
                 "--remote-debugging-address=127.0.0.1",
                 "--remote-debugging-port=9222",
             ],
@@ -27,7 +30,7 @@ def main():
             page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=45000)
         except Exception:
             pass
-        print("GUI_CHROMIUM_READY profile=/data/betroxy_chrome_profile cdp=127.0.0.1:9222", flush=True)
+        print("GUI_GOOGLE_CHROME_READY profile=/data/betroxy_chrome_profile cdp=127.0.0.1:9222 media_codecs=enabled", flush=True)
         while True:
             time.sleep(3600)
 
