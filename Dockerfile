@@ -2,16 +2,18 @@ FROM mcr.microsoft.com/playwright/python:v1.55.0-noble
 
 WORKDIR /app
 
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    xvfb x11vnc fluxbox novnc websockify \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY checker_requirements.txt /app/checker_requirements.txt
 RUN pip install --no-cache-dir -r /app/checker_requirements.txt
 
-COPY cloud_checker_worker.py /app/cloud_checker_worker.py
-COPY cloud_checker_app.py /app/cloud_checker_app.py
-COPY cloud_checker_live.py /app/cloud_checker_live.py
-COPY cloud_checker_v38_bootstrap.py /app/cloud_checker_v38_bootstrap.py
-COPY cloud_checker_v39_three_link_test.py /app/cloud_checker_v39_three_link_test.py
-COPY cloud_checker_v40_remote_login.py /app/cloud_checker_v40_remote_login.py
+COPY cloud_gui_browser.py /app/cloud_gui_browser.py
+COPY start_gui.sh /app/start_gui.sh
+RUN chmod +x /app/start_gui.sh
 
 ENV PYTHONUNBUFFERED=1
+ENV DISPLAY=:99
 
-CMD ["python", "/app/cloud_checker_v40_remote_login.py"]
+CMD ["/app/start_gui.sh"]
