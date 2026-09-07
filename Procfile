@@ -1,1 +1,1 @@
-worker: python v41_apify_balance_reports_bootstrap.py
+worker: python v42_reporting_center_bootstrap.py
