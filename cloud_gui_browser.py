@@ -1,16 +1,13 @@
 import os
+import subprocess
 import time
 from pathlib import Path
-from playwright.sync_api import sync_playwright
 
 PROFILE_DIR = "/data/betroxy_chrome_profile"
 CHROME = "/usr/bin/google-chrome-stable"
 
 
 def clear_stale_profile_locks():
-    # Railway redeploys can leave Chrome singleton lock files inside the persistent
-    # profile volume. On a fresh container those files are stale and prevent Chrome
-    # from starting, leaving noVNC with a blank desktop.
     for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
         path = Path(PROFILE_DIR) / name
         try:
@@ -28,31 +25,31 @@ def main():
     os.makedirs(PROFILE_DIR, exist_ok=True)
     clear_stale_profile_locks()
 
-    with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            PROFILE_DIR,
-            executable_path=CHROME,
-            headless=False,
-            viewport={"width": 1365, "height": 900},
-            timeout=60000,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--start-maximized",
-                "--autoplay-policy=no-user-gesture-required",
-                "--remote-debugging-address=127.0.0.1",
-                "--remote-debugging-port=9222",
-            ],
-        )
-        page = context.pages[0] if context.pages else context.new_page()
-        try:
-            page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=45000)
-        except Exception as exc:
-            print(f"GUI_CHROME_NAV_WARN {type(exc).__name__}: {exc}", flush=True)
-        print("GUI_GOOGLE_CHROME_READY profile=/data/betroxy_chrome_profile cdp=127.0.0.1:9222 media_codecs=enabled", flush=True)
-        while True:
-            time.sleep(3600)
+    args = [
+        CHROME,
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--start-maximized",
+        "--window-size=1365,900",
+        "--autoplay-policy=no-user-gesture-required",
+        "--remote-debugging-address=127.0.0.1",
+        "--remote-debugging-port=9222",
+        f"--user-data-dir={PROFILE_DIR}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "https://www.instagram.com/",
+    ]
+
+    print("GUI_RAW_GOOGLE_CHROME_STARTING", flush=True)
+    proc = subprocess.Popen(args, env=os.environ.copy())
+    print("GUI_RAW_GOOGLE_CHROME_STARTED cdp=127.0.0.1:9222 profile=/data/betroxy_chrome_profile", flush=True)
+
+    while True:
+        code = proc.poll()
+        if code is not None:
+            print(f"GUI_RAW_GOOGLE_CHROME_EXIT code={code}", flush=True)
+            raise SystemExit(code)
+        time.sleep(5)
 
 
 if __name__ == "__main__":
