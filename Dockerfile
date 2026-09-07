@@ -3,13 +3,18 @@ FROM mcr.microsoft.com/playwright/python:v1.55.0-noble
 WORKDIR /app
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    xvfb x11vnc fluxbox novnc websockify \
+    xvfb x11vnc fluxbox novnc websockify ffmpeg wget ca-certificates \
+    && wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/google-chrome.deb \
+    && apt-get install -y /tmp/google-chrome.deb \
+    && rm -f /tmp/google-chrome.deb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY checker_requirements.txt /app/checker_requirements.txt
 RUN pip install --no-cache-dir -r /app/checker_requirements.txt
 
+COPY cloud_checker_worker.py /app/cloud_checker_worker.py
 COPY cloud_gui_browser.py /app/cloud_gui_browser.py
+COPY cloud_checker_gui_shared_test.py /app/cloud_checker_gui_shared_test.py
 COPY start_gui.sh /app/start_gui.sh
 RUN chmod +x /app/start_gui.sh
 
