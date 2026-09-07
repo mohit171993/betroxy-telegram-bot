@@ -1,1 +1,1 @@
-worker: python bot.py
+worker: python patch_runner.py
