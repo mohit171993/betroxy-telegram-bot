@@ -60,6 +60,108 @@ def _v27_hybrid_pending_targets():
 bot._hybrid_pending_targets = _v27_hybrid_pending_targets
 
 
+def _all_browser_results_received_for_current_run():
+    """Return True once every active Instagram creator posted a result after this run was requested."""
+    control = bot.get_local_verifier_control() or {}
+    requested_at = control.get("requested_at")
+    if not requested_at or str(control.get("status") or "") != "running":
+        return False
+
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM campaign_links
+                WHERE is_active=TRUE
+                  AND LOWER(COALESCE(source_type,'instagram'))='instagram'
+                ORDER BY id
+                """
+            )
+            links = cur.fetchall()
+
+    if not links:
+        return True
+
+    for cl in links:
+        day = bot.current_campaign_day(cl)
+        v = bot.get_verification_row(cl["id"], day) or {}
+        checked_at = v.get("auto_checked_at")
+        mode = str(v.get("checker_mode") or "").lower()
+        if not checked_at or checked_at < requested_at or mode != "local_browser":
+            return False
+    return True
+
+
+def _start_fallback_if_browser_batch_complete():
+    """Atomically start Apify fallback after the final browser result arrives."""
+    try:
+        if not _all_browser_results_received_for_current_run():
+            return
+
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE verifier_control
+                    SET status='apify_fallback',
+                        result_summary=COALESCE(result_summary,'') || ' | Browser batch complete (server detected)'
+                    WHERE id=1 AND status='running'
+                    RETURNING run_token
+                    """
+                )
+                row = cur.fetchone()
+            conn.commit()
+
+        # Multiple result requests can finish almost together. Only the one that
+        # wins the atomic UPDATE starts the paid fallback thread.
+        if not row or not row.get("run_token"):
+            return
+
+        token = str(row["run_token"])
+        summary = "Browser batch complete (server detected)"
+        bot.logger.warning("SMART_CHECKER_AUTO_COMPLETE token=%s; starting Apify fallback", token[:8])
+        bot.Thread(
+            target=bot._finish_hybrid_run_in_background,
+            args=(token, summary),
+            daemon=True,
+        ).start()
+    except Exception:
+        bot.logger.exception("SMART_CHECKER_AUTO_COMPLETE failed")
+
+
+def _patch_verifier_result_endpoint():
+    """
+    The Windows listener used by older V35 builds can upload every result but
+    sometimes never call /api/verifier/complete. Wrap the result endpoint so the
+    server itself detects the final browser result and starts fallback reliably.
+    """
+    endpoint = "verifier_result"
+    original = bot.tracker_api.view_functions.get(endpoint)
+    if not original or getattr(original, "_v27_auto_complete_wrapped", False):
+        return
+
+    def wrapped_verifier_result(*args, **kwargs):
+        response = original(*args, **kwargs)
+        try:
+            # Run completion detection only after the original endpoint successfully
+            # stores the browser result. Flask handlers may return response or tuple.
+            status_code = 200
+            if isinstance(response, tuple) and len(response) >= 2:
+                status_code = int(response[1])
+            elif hasattr(response, "status_code"):
+                status_code = int(response.status_code)
+            if 200 <= status_code < 300:
+                _start_fallback_if_browser_batch_complete()
+        except Exception:
+            bot.logger.exception("SMART_CHECKER result wrapper failed")
+        return response
+
+    wrapped_verifier_result._v27_auto_complete_wrapped = True
+    bot.tracker_api.view_functions[endpoint] = wrapped_verifier_result
+    bot.logger.warning("SMART_CHECKER_SERVER_AUTO_COMPLETE_PATCH_ACTIVE")
+
+
 def _compact_progress():
     try:
         with bot.get_db() as conn:
@@ -150,6 +252,7 @@ def _patch_status_renderers():
         bot.logger.info("V27 patched Smart Checker status renderer: %s", name)
 
 
+_patch_verifier_result_endpoint()
 _patch_status_renderers()
 bot.logger.info("BETROXY checker V27 patch active")
 
