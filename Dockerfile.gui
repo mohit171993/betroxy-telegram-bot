@@ -9,7 +9,9 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 COPY checker_requirements.txt /app/checker_requirements.txt
 RUN pip install --no-cache-dir -r /app/checker_requirements.txt
 
+COPY cloud_checker_worker.py /app/cloud_checker_worker.py
 COPY cloud_gui_browser.py /app/cloud_gui_browser.py
+COPY cloud_checker_gui_shared_test.py /app/cloud_checker_gui_shared_test.py
 COPY start_gui.sh /app/start_gui.sh
 RUN chmod +x /app/start_gui.sh
 
