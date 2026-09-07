@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone, timedelta
 import bot
 import v27_runner  # activates smart-checker Apify fallback + live progress patches
 
@@ -24,7 +25,7 @@ def _is_smart_test_handle(row):
     return _smart_test_match_username(row.get("instagram_username"))
 
 
-# Limit /api/verifier/targets to the 3 diagnostic creators.
+# Limit /api/verifier/targets to the diagnostic creators.
 _original_verifier_targets = bot.tracker_api.view_functions.get("verifier_targets")
 if _original_verifier_targets and not getattr(_original_verifier_targets, "_smart_test_wrapped", False):
     def _smart_test_verifier_targets(*args, **kwargs):
@@ -34,7 +35,6 @@ if _original_verifier_targets and not getattr(_original_verifier_targets, "_smar
             targets = data.get("targets") or []
             selected = [t for t in targets if _smart_test_match_username(t.get("username"))]
 
-            # Keep at most one match for each diagnostic pattern and no more than 3 total.
             deduped = []
             seen = set()
             for pattern in SMART_TEST_PATTERNS:
@@ -45,9 +45,6 @@ if _original_verifier_targets and not getattr(_original_verifier_targets, "_smar
                         seen.add(u)
                         break
 
-            # Diagnostic safety: never return an empty test set. If historical usernames
-            # changed, return the first 3 active Instagram targets so the Windows checker
-            # can still be tested instead of finishing with Results uploaded=0.
             if not deduped:
                 deduped = targets[:3]
                 bot.logger.warning(
@@ -73,12 +70,13 @@ if _original_verifier_targets and not getattr(_original_verifier_targets, "_smar
     bot.logger.warning("SMART_CHECKER_TEST_MODE_ACTIVE patterns=%s", SMART_TEST_PATTERNS)
 
 
-# Make completion detection wait only for the same test creators.
+# Completion detection for V35 test mode.
+# Do not depend on /api/verifier/command being claimed or exact requested_at ordering.
+# If every selected creator has a fresh local-browser result, the batch is complete.
 def _smart_test_all_browser_results_received():
     control = bot.get_local_verifier_control() or {}
-    requested_at = control.get("requested_at")
     state = str(control.get("status") or "")
-    if not requested_at or state not in {"requested", "running"}:
+    if state not in {"requested", "running"}:
         return False
 
     with bot.get_db() as conn:
@@ -100,13 +98,21 @@ def _smart_test_all_browser_results_received():
     if not links:
         return False
 
+    fresh_after = datetime.now(timezone.utc) - timedelta(minutes=10)
+    details = []
     for cl in links[:3]:
         day = bot.current_campaign_day(cl)
         v = bot.get_verification_row(cl["id"], day) or {}
         checked_at = v.get("auto_checked_at")
         mode = str(v.get("checker_mode") or "").lower()
-        if not checked_at or checked_at < requested_at or mode != "local_browser":
+        username = str(cl.get("instagram_username") or cl.get("id"))
+        is_fresh = bool(checked_at and checked_at >= fresh_after and mode == "local_browser")
+        details.append((username, str(checked_at), mode, is_fresh))
+        if not is_fresh:
+            bot.logger.warning("SMART_TEST batch not complete details=%s", details)
             return False
+
+    bot.logger.warning("SMART_TEST fresh browser batch complete details=%s", details)
     return True
 
 
