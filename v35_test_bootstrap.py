@@ -1,8 +1,17 @@
 print("V35_EXACT_BOOTSTRAP_ENTER", flush=True)
 
 from datetime import datetime, timezone, timedelta
+import logging
 
 import bot
+
+# Security: python-telegram-bot uses httpx internally. At INFO level httpx logs
+# the full Telegram Bot API request URL, which contains the bot token.
+# Keep normal application logs, but suppress request-level logs from HTTP clients.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("telegram.request").setLevel(logging.WARNING)
+
 import patch_runner  # applies existing bulk + checker patches without starting bot.main()
 import v27_runner
 
