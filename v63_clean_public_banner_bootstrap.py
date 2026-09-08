@@ -1,15 +1,33 @@
+import io
 import os
 import requests
+from PIL import Image
 
 import bot
 import v62_ai_admin_assistant_bootstrap as v62
 
-# High-quality BETROXY public banner from the repository.
-# Telegram fetches the JPEG directly so it keeps the reliable delivery path.
 BANNER_URL = (
     "https://raw.githubusercontent.com/"
     "mohit171993/betroxy-telegram-bot/main/betroxy_public_banner.jpg"
 )
+
+
+def _hq_banner_bytes():
+    """Download and normalize the banner into a Telegram-safe RGB JPEG."""
+    r = requests.get(BANNER_URL, timeout=30)
+    r.raise_for_status()
+    with Image.open(io.BytesIO(r.content)) as im:
+        im = im.convert("RGB")
+        # Keep it sharp but within a Telegram-friendly size.
+        max_width = 1280
+        if im.width > max_width:
+            new_h = round(im.height * max_width / im.width)
+            im = im.resize((max_width, new_h), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        im.save(out, format="JPEG", quality=94, optimize=True, progressive=False, subsampling=0)
+        out.seek(0)
+        out.name = "betroxy_hq_banner.jpg"
+        return out
 
 
 def run_banner_self_test_once():
@@ -20,20 +38,26 @@ def run_banner_self_test_once():
         if not token or not admin_id:
             bot.logger.warning("V63 HQ banner self-test skipped: BOT_TOKEN/ADMIN_ID missing")
             return
+
+        banner = _hq_banner_bytes()
         response = requests.post(
             f"https://api.telegram.org/bot{token}/sendPhoto",
             data={
                 "chat_id": admin_id,
-                "photo": BANNER_URL,
                 "caption": "✅ BETROXY HQ banner deployment test",
             },
+            files={"photo": (banner.name, banner.getvalue(), "image/jpeg")},
             timeout=30,
         )
         payload = response.json() if response.content else {}
         if response.ok and payload.get("ok"):
             bot.logger.warning("V63_HQ_BANNER_SELF_TEST SUCCESS")
         else:
-            bot.logger.error("V63_HQ_BANNER_SELF_TEST FAILED status=%s response=%s", response.status_code, payload)
+            bot.logger.error(
+                "V63_HQ_BANNER_SELF_TEST FAILED status=%s response=%s",
+                response.status_code,
+                payload,
+            )
     except Exception as exc:
         bot.logger.exception("V63_HQ_BANNER_SELF_TEST ERROR: %s", exc)
 
@@ -41,17 +65,21 @@ def run_banner_self_test_once():
 async def v63_start(update, context):
     if getattr(context, "args", None):
         return await v62.v61.v60.v59.v59_start(update, context)
+
     msg = update.effective_message
     if not msg:
         return
+
     try:
+        banner = _hq_banner_bytes()
         await msg.reply_photo(
-            photo=BANNER_URL,
+            photo=banner,
             caption="✨ <b>BETROXY</b> • Official Access & Support",
             parse_mode=bot.ParseMode.HTML,
         )
     except Exception as exc:
         bot.logger.exception("V63 HQ public banner failed: %s", exc)
+
     await msg.reply_text(
         v62.v61.v60.v59.v53.v53_public_welcome_text(),
         parse_mode=bot.ParseMode.HTML,
@@ -63,7 +91,7 @@ async def v63_start(update, context):
 
 
 bot.start = v63_start
-bot.logger.warning("V63_PUBLIC_BANNER_FIX active=on source=hq_betroxy_public_banner")
+bot.logger.warning("V63_PUBLIC_BANNER_FIX active=on source=hq_runtime_reencode")
 
 if __name__ == "__main__":
     run_banner_self_test_once()
