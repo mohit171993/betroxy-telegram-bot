@@ -1,1 +1,1 @@
-worker: python v49_telegram_business_inbox_bootstrap.py
+worker: python v50_telegram_business_handler_fix_bootstrap.py
