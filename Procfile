@@ -1,1 +1,1 @@
-worker: python v52_business_smart_reply_legacy_reset_bootstrap.py
+worker: python v53_attractive_customer_experience_bootstrap.py
