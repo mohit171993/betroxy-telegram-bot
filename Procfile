@@ -1,1 +1,1 @@
-worker: python v50_telegram_business_handler_fix_bootstrap.py
+worker: python v51_telegram_business_auto_conversion_bootstrap.py
