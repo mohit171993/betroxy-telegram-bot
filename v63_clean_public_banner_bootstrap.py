@@ -1,33 +1,15 @@
-import io
 import os
 import requests
-from PIL import Image
 
 import bot
 import v62_ai_admin_assistant_bootstrap as v62
 
+# Use the original high-resolution BETROXY banner already stored in the repo.
+# This path is 1.6 MB and avoids the low-quality 117 KB test image.
 BANNER_URL = (
     "https://raw.githubusercontent.com/"
-    "mohit171993/betroxy-telegram-bot/main/betroxy_public_banner.jpg"
+    "mohit171993/betroxy-telegram-bot/main/oldwelcome_banner.jpg"
 )
-
-
-def _hq_banner_bytes():
-    """Download and normalize the banner into a Telegram-safe RGB JPEG."""
-    r = requests.get(BANNER_URL, timeout=30)
-    r.raise_for_status()
-    with Image.open(io.BytesIO(r.content)) as im:
-        im = im.convert("RGB")
-        # Keep it sharp but within a Telegram-friendly size.
-        max_width = 1280
-        if im.width > max_width:
-            new_h = round(im.height * max_width / im.width)
-            im = im.resize((max_width, new_h), Image.Resampling.LANCZOS)
-        out = io.BytesIO()
-        im.save(out, format="JPEG", quality=94, optimize=True, progressive=False, subsampling=0)
-        out.seek(0)
-        out.name = "betroxy_hq_banner.jpg"
-        return out
 
 
 def run_banner_self_test_once():
@@ -39,14 +21,13 @@ def run_banner_self_test_once():
             bot.logger.warning("V63 HQ banner self-test skipped: BOT_TOKEN/ADMIN_ID missing")
             return
 
-        banner = _hq_banner_bytes()
         response = requests.post(
             f"https://api.telegram.org/bot{token}/sendPhoto",
             data={
                 "chat_id": admin_id,
+                "photo": BANNER_URL,
                 "caption": "✅ BETROXY HQ banner deployment test",
             },
-            files={"photo": (banner.name, banner.getvalue(), "image/jpeg")},
             timeout=30,
         )
         payload = response.json() if response.content else {}
@@ -71,9 +52,8 @@ async def v63_start(update, context):
         return
 
     try:
-        banner = _hq_banner_bytes()
         await msg.reply_photo(
-            photo=banner,
+            photo=BANNER_URL,
             caption="✨ <b>BETROXY</b> • Official Access & Support",
             parse_mode=bot.ParseMode.HTML,
         )
@@ -91,7 +71,7 @@ async def v63_start(update, context):
 
 
 bot.start = v63_start
-bot.logger.warning("V63_PUBLIC_BANNER_FIX active=on source=hq_runtime_reencode")
+bot.logger.warning("V63_PUBLIC_BANNER_FIX active=on source=oldwelcome_banner_hq")
 
 if __name__ == "__main__":
     run_banner_self_test_once()
