@@ -1,1 +1,1 @@
-worker: python v56_checkout_whatsapp_bootstrap.py
+worker: python v57_new_banner_bootstrap.py
