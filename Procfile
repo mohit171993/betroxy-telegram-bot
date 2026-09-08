@@ -1,1 +1,1 @@
-worker: python v51_telegram_business_auto_conversion_bootstrap.py
+worker: python v52_business_smart_reply_legacy_reset_bootstrap.py
