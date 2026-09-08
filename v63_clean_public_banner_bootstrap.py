@@ -1,9 +1,13 @@
-import os
+import base64
+import io
 
 import bot
 import v62_ai_admin_assistant_bootstrap as v62
+import v57_new_banner_bootstrap as v57
 
-BANNER_PATH = os.path.join(os.path.dirname(__file__), "betroxy_public_banner.jpg")
+# Use the known-good JPEG bytes already embedded in V57. This avoids the
+# malformed betroxy_public_banner.jpg that Telegram rejects with
+# Image_process_failed while keeping the current V63 menu/AI behavior.
 
 async def v63_start(update, context):
     if getattr(context, "args", None):
@@ -12,14 +16,15 @@ async def v63_start(update, context):
     if not msg:
         return
     try:
-        with open(BANNER_PATH, "rb") as banner:
-            await msg.reply_photo(
-                photo=banner,
-                caption="✨ <b>BETROXY</b> • Official Access & Support",
-                parse_mode=bot.ParseMode.HTML,
-            )
+        banner = io.BytesIO(base64.b64decode(v57._BANNER_B64))
+        banner.name = "betroxy_banner.jpg"
+        await msg.reply_photo(
+            photo=banner,
+            caption="✨ <b>BETROXY</b> • Official Access & Support",
+            parse_mode=bot.ParseMode.HTML,
+        )
     except Exception as exc:
-        bot.logger.exception("V63 approved public banner failed: %s", exc)
+        bot.logger.exception("V63 public banner failed: %s", exc)
     await msg.reply_text(
         v62.v61.v60.v59.v53.v53_public_welcome_text(),
         parse_mode=bot.ParseMode.HTML,
@@ -28,7 +33,7 @@ async def v63_start(update, context):
     )
 
 bot.start = v63_start
-bot.logger.warning("V63_APPROVED_PUBLIC_BANNER active=on asset=betroxy_public_banner.jpg")
+bot.logger.warning("V63_PUBLIC_BANNER_FIX active=on source=v57_embedded_jpeg")
 
 if __name__ == "__main__":
     bot.main()
