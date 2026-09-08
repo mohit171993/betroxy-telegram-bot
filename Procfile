@@ -1,1 +1,1 @@
-worker: python v54_theme_banner_open_app_bootstrap.py
+worker: python v55_force_public_start_bootstrap.py
