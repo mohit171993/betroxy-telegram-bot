@@ -1,1 +1,1 @@
-worker: python v53_attractive_customer_experience_bootstrap.py
+worker: python v54_theme_banner_open_app_bootstrap.py
