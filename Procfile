@@ -1,1 +1,1 @@
-worker: python v55_force_public_start_bootstrap.py
+worker: python v56_checkout_whatsapp_bootstrap.py
