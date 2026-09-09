@@ -12,6 +12,33 @@ BANNER_URL = (
 )
 
 
+def apply_signup_cta():
+    """Change the live Batraxy primary CTA label to SIGN UP without changing its destination."""
+    try:
+        bot.DEFAULT_LANDING_HTML = (
+            bot.DEFAULT_LANDING_HTML
+            .replace("🚀 PLAY ON WEBSITE", "👤 SIGN UP")
+            .replace("PLAY ON WEBSITE", "SIGN UP")
+        )
+
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE landing_themes
+                    SET index_html = REPLACE(
+                        REPLACE(index_html, '🚀 PLAY ON WEBSITE', '👤 SIGN UP'),
+                        'PLAY ON WEBSITE', 'SIGN UP'
+                    )
+                    WHERE is_active=TRUE
+                    """
+                )
+            conn.commit()
+        bot.logger.warning("BATraxy CTA updated: SIGN UP")
+    except Exception as exc:
+        bot.logger.exception("Could not update Batraxy SIGN UP CTA: %s", exc)
+
+
 def run_banner_self_test_once():
     """Send one deployment-time HQ banner test to ADMIN_ID and log the result."""
     try:
@@ -74,5 +101,6 @@ bot.start = v63_start
 bot.logger.warning("V63_PUBLIC_BANNER_FIX active=on source=oldwelcome_banner_hq")
 
 if __name__ == "__main__":
+    apply_signup_cta()
     run_banner_self_test_once()
     bot.main()
