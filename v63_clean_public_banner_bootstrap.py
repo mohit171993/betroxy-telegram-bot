@@ -1,15 +1,18 @@
 import os
+import html
 import requests
 
 import bot
 import v62_ai_admin_assistant_bootstrap as v62
+import v51_telegram_business_auto_conversion_bootstrap as biz51
 
 # Use the original high-resolution BETROXY banner already stored in the repo.
-# This path is 1.6 MB and avoids the low-quality 117 KB test image.
 BANNER_URL = (
     "https://raw.githubusercontent.com/"
     "mohit171993/betroxy-telegram-bot/main/oldwelcome_banner.jpg"
 )
+
+BUSINESS_SUPPORT_URL = "https://t.me/betroxysports"
 
 
 def apply_signup_cta():
@@ -37,6 +40,94 @@ def apply_signup_cta():
         bot.logger.warning("BATraxy CTA updated: SIGN UP")
     except Exception as exc:
         bot.logger.exception("Could not update Batraxy SIGN UP CTA: %s", exc)
+
+
+def _business_welcome_keyboard():
+    return bot.InlineKeyboardMarkup([
+        [bot.InlineKeyboardButton("🚀 PLAY NOW", url=biz51.BETROXY_PRODUCT_BOT)],
+        [
+            bot.InlineKeyboardButton("🎰 Casino", url=biz51.BETROXY_CASINO),
+            bot.InlineKeyboardButton("🏏 Sportsbook", url=biz51.BETROXY_SPORTSBOOK),
+        ],
+        [
+            bot.InlineKeyboardButton("🌐 Website", url=biz51.BETROXY_WEBSITE),
+            bot.InlineKeyboardButton("🎧 Support", url=BUSINESS_SUPPORT_URL),
+        ],
+    ])
+
+
+def _upgraded_business_reply_payload(intent, first_reply=False):
+    if first_reply or intent in {"greeting", "general"}:
+        return (
+            "👋 <b>Welcome to BETROXY!</b> ✨\n\n"
+            "Thanks for contacting us. Choose an option below for quick access.\n\n"
+            "⚡ <b>Need help? Just type one of these:</b>\n"
+            "💳 Deposit   •   💸 Withdrawal\n"
+            "🎁 Bonus     •   🔐 Login\n"
+            "🏏 Sportsbook   •   🎰 Casino\n\n"
+            "Our support team can also continue with you here.",
+            _business_welcome_keyboard(),
+            "engaged",
+        )
+    return biz51._original_reply_payload(intent, first_reply=False)
+
+
+async def _upgraded_send_smart_reply(context, enquiry, intent):
+    first_reply = not bool(enquiry.get("auto_ack_sent_at"))
+    text, keyboard, stage = biz51._reply_payload(intent, first_reply=first_reply)
+
+    # Give new enquiries a branded visual header. If Telegram Business rejects
+    # the photo for any reason, the text/buttons still continue normally.
+    if first_reply:
+        try:
+            await context.bot.send_photo(
+                chat_id=int(enquiry["customer_chat_id"]),
+                photo=BANNER_URL,
+                caption="✨ <b>BETROXY</b> • Casino • Sportsbook • Exchange",
+                parse_mode=bot.ParseMode.HTML,
+                business_connection_id=str(enquiry["connection_id"]),
+            )
+        except Exception:
+            bot.logger.exception("BUSINESS_WELCOME_BANNER_FAILED")
+
+    try:
+        sent = await context.bot.send_message(
+            chat_id=int(enquiry["customer_chat_id"]),
+            text=text,
+            parse_mode=bot.ParseMode.HTML,
+            business_connection_id=str(enquiry["connection_id"]),
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        fallback = (
+            html.unescape(text.replace("<b>", "").replace("</b>", ""))
+            + f"\n\nPlay Now: {biz51.BETROXY_PRODUCT_BOT}"
+            + f"\nWebsite: {biz51.BETROXY_WEBSITE}"
+            + f"\nSupport: {BUSINESS_SUPPORT_URL}"
+        )
+        sent = await context.bot.send_message(
+            chat_id=int(enquiry["customer_chat_id"]),
+            text=fallback,
+            business_connection_id=str(enquiry["connection_id"]),
+            disable_web_page_preview=True,
+        )
+        text = fallback
+
+    if first_reply:
+        biz51.v49._mark_auto_ack(enquiry["id"])
+    biz51.v49._record_outbound(enquiry["id"], getattr(sent, "message_id", None), text)
+    return biz51._update_lead_state(
+        enquiry["id"], intent=intent, stage=stage, auto_replied=True
+    )
+
+
+# Preserve the original V51 intent-specific answers, while replacing only the
+# first/generic enquiry experience with the upgraded branded layout.
+biz51._original_reply_payload = biz51._reply_payload
+biz51._reply_payload = _upgraded_business_reply_payload
+biz51._send_smart_reply = _upgraded_send_smart_reply
+bot.logger.warning("BUSINESS_ENQUIRY_UI_UPGRADE active=on")
 
 
 def run_banner_self_test_once():
