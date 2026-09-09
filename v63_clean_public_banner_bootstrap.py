@@ -1,12 +1,12 @@
 import os
 import html
 import requests
+from datetime import datetime, timezone
 
 import bot
 import v62_ai_admin_assistant_bootstrap as v62
 import v51_telegram_business_auto_conversion_bootstrap as biz51
 
-# Use the original high-resolution BETROXY banner already stored in the repo.
 BANNER_URL = (
     "https://raw.githubusercontent.com/"
     "mohit171993/betroxy-telegram-bot/main/oldwelcome_banner.jpg"
@@ -16,14 +16,12 @@ BUSINESS_SUPPORT_URL = "https://t.me/betroxysports"
 
 
 def apply_signup_cta():
-    """Change the live Batraxy primary CTA label to SIGN UP without changing its destination."""
     try:
         bot.DEFAULT_LANDING_HTML = (
             bot.DEFAULT_LANDING_HTML
             .replace("🚀 PLAY ON WEBSITE", "👤 SIGN UP")
             .replace("PLAY ON WEBSITE", "SIGN UP")
         )
-
         with bot.get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -43,7 +41,6 @@ def apply_signup_cta():
 
 
 def enable_business_smart_auto_reply():
-    """Ensure Telegram Business enquiry auto-replies are enabled after every deploy."""
     try:
         with bot.get_db() as conn:
             with conn.cursor() as cur:
@@ -55,8 +52,19 @@ def enable_business_smart_auto_reply():
                     WHERE id=1
                     """
                 )
+                # Clear stale test state so existing test chats can receive the
+                # upgraded welcome once after this deployment.
+                cur.execute(
+                    """
+                    UPDATE telegram_business_enquiries
+                    SET auto_ack_sent_at=NULL,
+                        auto_reply_count=0,
+                        last_auto_reply_at=NULL
+                    WHERE status='open'
+                    """
+                )
             conn.commit()
-        bot.logger.warning("BUSINESS_SMART_AUTO_REPLY forced=ON")
+        bot.logger.warning("BUSINESS_SMART_AUTO_REPLY forced=ON stale_open_state_reset=on")
     except Exception as exc:
         bot.logger.exception("Could not enable BUSINESS_SMART_AUTO_REPLY: %s", exc)
 
@@ -139,10 +147,35 @@ async def _upgraded_send_smart_reply(context, enquiry, intent):
     )
 
 
+# Preserve original helpers before patching.
 biz51._original_reply_payload = biz51._reply_payload
+_original_update_lead_state = biz51._update_lead_state
+
+
+def _greeting_retry_update_lead_state(enquiry_id, intent=None, stage=None, auto_replied=False):
+    row = _original_update_lead_state(enquiry_id, intent=intent, stage=stage, auto_replied=auto_replied)
+    # V51 intentionally suppresses repeat greetings once auto_ack_sent_at exists.
+    # For sales enquiries, allow a greeting to receive the welcome again after
+    # the existing throttle window, while still respecting the 5-reply cap.
+    if row and intent == "greeting" and not auto_replied:
+        count = int(row.get("auto_reply_count") or 0)
+        last = row.get("last_auto_reply_at")
+        allowed = count < 5
+        if last:
+            try:
+                allowed = allowed and (datetime.now(timezone.utc) - last).total_seconds() >= 30
+            except Exception:
+                pass
+        if allowed:
+            row = dict(row)
+            row["auto_ack_sent_at"] = None
+    return row
+
+
+biz51._update_lead_state = _greeting_retry_update_lead_state
 biz51._reply_payload = _upgraded_business_reply_payload
 biz51._send_smart_reply = _upgraded_send_smart_reply
-bot.logger.warning("BUSINESS_ENQUIRY_UI_UPGRADE active=on")
+bot.logger.warning("BUSINESS_ENQUIRY_UI_UPGRADE active=on greeting_retry=on")
 
 
 def run_banner_self_test_once():
