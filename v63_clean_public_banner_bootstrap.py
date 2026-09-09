@@ -42,6 +42,25 @@ def apply_signup_cta():
         bot.logger.exception("Could not update Batraxy SIGN UP CTA: %s", exc)
 
 
+def enable_business_smart_auto_reply():
+    """Ensure Telegram Business enquiry auto-replies are enabled after every deploy."""
+    try:
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE telegram_business_settings
+                    SET auto_ack_enabled=TRUE,
+                        updated_at=NOW()
+                    WHERE id=1
+                    """
+                )
+            conn.commit()
+        bot.logger.warning("BUSINESS_SMART_AUTO_REPLY forced=ON")
+    except Exception as exc:
+        bot.logger.exception("Could not enable BUSINESS_SMART_AUTO_REPLY: %s", exc)
+
+
 def _business_welcome_keyboard():
     return bot.InlineKeyboardMarkup([
         [bot.InlineKeyboardButton("🚀 PLAY NOW", url=biz51.BETROXY_PRODUCT_BOT)],
@@ -76,8 +95,6 @@ async def _upgraded_send_smart_reply(context, enquiry, intent):
     first_reply = not bool(enquiry.get("auto_ack_sent_at"))
     text, keyboard, stage = biz51._reply_payload(intent, first_reply=first_reply)
 
-    # Give new enquiries a branded visual header. If Telegram Business rejects
-    # the photo for any reason, the text/buttons still continue normally.
     if first_reply:
         try:
             await context.bot.send_photo(
@@ -122,8 +139,6 @@ async def _upgraded_send_smart_reply(context, enquiry, intent):
     )
 
 
-# Preserve the original V51 intent-specific answers, while replacing only the
-# first/generic enquiry experience with the upgraded branded layout.
 biz51._original_reply_payload = biz51._reply_payload
 biz51._reply_payload = _upgraded_business_reply_payload
 biz51._send_smart_reply = _upgraded_send_smart_reply
@@ -131,7 +146,6 @@ bot.logger.warning("BUSINESS_ENQUIRY_UI_UPGRADE active=on")
 
 
 def run_banner_self_test_once():
-    """Send one deployment-time HQ banner test to ADMIN_ID and log the result."""
     try:
         token = os.getenv("BOT_TOKEN", "").strip()
         admin_id = os.getenv("ADMIN_ID", "").strip()
@@ -193,5 +207,6 @@ bot.logger.warning("V63_PUBLIC_BANNER_FIX active=on source=oldwelcome_banner_hq"
 
 if __name__ == "__main__":
     apply_signup_cta()
+    enable_business_smart_auto_reply()
     run_banner_self_test_once()
     bot.main()
