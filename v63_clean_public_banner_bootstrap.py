@@ -52,8 +52,6 @@ def enable_business_smart_auto_reply():
                     WHERE id=1
                     """
                 )
-                # Clear stale test state so existing test chats can receive the
-                # upgraded welcome once after this deployment.
                 cur.execute(
                     """
                     UPDATE telegram_business_enquiries
@@ -147,16 +145,12 @@ async def _upgraded_send_smart_reply(context, enquiry, intent):
     )
 
 
-# Preserve original helpers before patching.
 biz51._original_reply_payload = biz51._reply_payload
 _original_update_lead_state = biz51._update_lead_state
 
 
 def _greeting_retry_update_lead_state(enquiry_id, intent=None, stage=None, auto_replied=False):
     row = _original_update_lead_state(enquiry_id, intent=intent, stage=stage, auto_replied=auto_replied)
-    # V51 intentionally suppresses repeat greetings once auto_ack_sent_at exists.
-    # For sales enquiries, allow a greeting to receive the welcome again after
-    # the existing throttle window, while still respecting the 5-reply cap.
     if row and intent == "greeting" and not auto_replied:
         count = int(row.get("auto_reply_count") or 0)
         last = row.get("last_auto_reply_at")
@@ -176,6 +170,102 @@ biz51._update_lead_state = _greeting_retry_update_lead_state
 biz51._reply_payload = _upgraded_business_reply_payload
 biz51._send_smart_reply = _upgraded_send_smart_reply
 bot.logger.warning("BUSINESS_ENQUIRY_UI_UPGRADE active=on greeting_retry=on")
+
+
+def _bot_analytics_stats():
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(DISTINCT telegram_user_id) AS n FROM referrals")
+            total = int((cur.fetchone() or {}).get("n") or 0)
+            cur.execute("SELECT COUNT(DISTINCT telegram_user_id) AS n FROM referrals WHERE joined_at >= DATE_TRUNC('day', NOW())")
+            today = int((cur.fetchone() or {}).get("n") or 0)
+            cur.execute("SELECT COUNT(DISTINCT telegram_user_id) AS n FROM referrals WHERE joined_at >= NOW() - INTERVAL '7 days'")
+            week = int((cur.fetchone() or {}).get("n") or 0)
+            cur.execute("SELECT COUNT(DISTINCT telegram_user_id) AS n FROM referrals WHERE joined_at >= NOW() - INTERVAL '30 days'")
+            month = int((cur.fetchone() or {}).get("n") or 0)
+            cur.execute("SELECT COUNT(DISTINCT telegram_user_id) AS n FROM referrals WHERE agent_id IS NULL")
+            direct = int((cur.fetchone() or {}).get("n") or 0)
+            cur.execute("SELECT COUNT(DISTINCT telegram_user_id) AS n FROM referrals WHERE agent_id IS NOT NULL")
+            referred = int((cur.fetchone() or {}).get("n") or 0)
+            cur.execute(
+                """
+                SELECT COALESCE(a.code, 'direct') AS source,
+                       COUNT(DISTINCT r.telegram_user_id) AS n
+                FROM referrals r
+                LEFT JOIN agents a ON a.id=r.agent_id
+                GROUP BY COALESCE(a.code, 'direct')
+                ORDER BY n DESC
+                LIMIT 8
+                """
+            )
+            sources = cur.fetchall()
+    return total, today, week, month, direct, referred, sources
+
+
+def _bot_analytics_text():
+    total, today, week, month, direct, referred, sources = _bot_analytics_stats()
+    lines = [
+        "📊 <b>BETROXY BOT ANALYTICS</b>",
+        "",
+        f"👥 Total unique users: <b>{total:,}</b>",
+        f"🟢 Today: <b>{today:,}</b>",
+        f"📅 Last 7 days: <b>{week:,}</b>",
+        f"🗓 Last 30 days: <b>{month:,}</b>",
+        "",
+        f"🔗 Direct starts: <b>{direct:,}</b>",
+        f"🤝 Referral starts: <b>{referred:,}</b>",
+    ]
+    if sources:
+        lines.extend(["", "<b>Top sources</b>"])
+        for row in sources:
+            source = str(row.get("source") or "direct")
+            label = "Direct / no referral" if source == "direct" else source
+            lines.append(f"• {html.escape(label)} — <b>{int(row.get('n') or 0):,}</b>")
+    lines.extend([
+        "",
+        "<i>Unique user = one Telegram user recorded when they first started/interacted with @BetroxyOfficialBot.</i>",
+    ])
+    return "\n".join(lines)
+
+
+def _bot_analytics_menu():
+    return bot.InlineKeyboardMarkup([
+        [bot.InlineKeyboardButton("🔄 Refresh Analytics", callback_data="bot_analytics")],
+        [bot.InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_home")],
+    ])
+
+
+_original_admin_menu = bot.admin_menu
+
+def _admin_menu_with_bot_analytics():
+    markup = _original_admin_menu()
+    rows = [list(row) for row in markup.inline_keyboard]
+    if not any(any(getattr(btn, "callback_data", None) == "bot_analytics" for btn in row) for row in rows):
+        rows.insert(1, [bot.InlineKeyboardButton("📊 Bot Analytics", callback_data="bot_analytics")])
+    return bot.InlineKeyboardMarkup(rows)
+
+
+bot.admin_menu = _admin_menu_with_bot_analytics
+_previous_callback_handler = bot.callback_handler
+
+
+async def _callback_handler_with_bot_analytics(update, context):
+    q = update.callback_query
+    if q and (q.data or "") == "bot_analytics":
+        await q.answer()
+        if not bot.is_admin(q.from_user.id):
+            return
+        await q.message.reply_text(
+            _bot_analytics_text(),
+            parse_mode=bot.ParseMode.HTML,
+            reply_markup=_bot_analytics_menu(),
+        )
+        return
+    return await _previous_callback_handler(update, context)
+
+
+bot.callback_handler = _callback_handler_with_bot_analytics
+bot.logger.warning("BOT_ANALYTICS_LIVE active=on admin_menu=on callback=on")
 
 
 def run_banner_self_test_once():
