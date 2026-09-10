@@ -16,7 +16,7 @@ v83 = v100.v83
 
 
 def _phonepe_probe():
-    """Read-only lookup of PhonePe catalogue entries. Never calls Giftport buy."""
+    """Read-only lookup of all PhonePe catalogue entries. Never calls Giftport buy."""
     try:
         ok, msg, count = v97._sync_catalogue()
         bot.logger.warning(
@@ -32,10 +32,12 @@ def _phonepe_probe():
                     SELECT brand_name, operator_code, denominations, variable, is_active
                     FROM reward_provider_catalogue
                     WHERE is_active=TRUE
-                      AND (brand_name ILIKE %s OR operator_code ILIKE %s)
+                      AND (
+                        REPLACE(LOWER(brand_name), ' ', '') LIKE '%phonepe%'
+                        OR UPPER(operator_code) IN ('GP298','GPPHP')
+                      )
                     ORDER BY brand_name, operator_code
-                    """,
-                    ("%PhonePe%", "%PHONE%"),
+                    """
                 )
                 rows = cur.fetchall()
         if not rows:
@@ -44,11 +46,12 @@ def _phonepe_probe():
         for row in rows:
             bot.logger.warning(
                 "V101_PHONEPE_ENTRY brand=%s operator=%s denominations=%s variable=%s",
-                str(row.get("brand_name") or "")[:120],
-                str(row.get("operator_code") or "")[:50],
-                str(row.get("denominations") or "")[:300],
+                str(row.get("brand_name") or "")[:160],
+                str(row.get("operator_code") or "")[:60],
+                str(row.get("denominations") or "")[:400],
                 bool(row.get("variable")),
             )
+        bot.logger.warning("V101_PHONEPE_PROBE matches=%s", len(rows))
     except Exception as exc:
         bot.logger.warning("V101_PHONEPE_PROBE error=%s", str(exc)[:300])
 
