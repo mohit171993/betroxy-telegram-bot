@@ -1,1 +1,1 @@
-worker: python v101_phonepe_catalogue_probe.py
+worker: python v102_phonepe_b2b_admin_test.py
