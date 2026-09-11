@@ -56,6 +56,7 @@ def install(schedule):
         if not rows:
             return original_winner_text(rows)
         medals = ["🥇", "🥈", "🥉"]
+        prizes = [500, 300, 200]
         lines = [
             "🏆 <b>BETROXY DAILY CHALLENGE — FINAL RESULTS</b>",
             "",
@@ -64,7 +65,10 @@ def install(schedule):
         ]
         for i, row in enumerate(rows[:3]):
             name = row.get("telegram_username") or f"Player {str(row.get('telegram_user_id') or '')[-4:]}"
-            lines.append(f"{medals[i]} <b>{html.escape(str(name))}</b> — {int(row.get('correct_count') or 0)}/7")
+            lines.append(
+                f"{medals[i]} <b>{html.escape(str(name))}</b> — "
+                f"{int(row.get('correct_count') or 0)}/7 — <b>₹{prizes[i]}</b>"
+            )
         lines += [
             "",
             "Final ranking: accuracy → hard-question accuracy → total answer time.",
@@ -75,4 +79,7 @@ def install(schedule):
     schedule._issue_winner_rewards = _issue_and_notify
     schedule._winner_text = _public_winner_text
     _INSTALLED = True
-    bot.logger.warning("QUIZ_WINNER_ANNOUNCEMENT active=on public_top3=on private_winner_notice=on duplicate_guard=on")
+    bot.logger.warning(
+        "QUIZ_WINNER_ANNOUNCEMENT active=on public_top3=on public_prizes=500/300/200 "
+        "private_winner_notice=on duplicate_guard=on"
+    )
