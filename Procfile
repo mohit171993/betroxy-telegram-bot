@@ -1,1 +1,1 @@
-worker: python v106_indian_mobile_chat_route_fix.py
+worker: python v105_indian_mobile_rewards.py
