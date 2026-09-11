@@ -1,1 +1,1 @@
-worker: python v110_betroxy_daily_challenge.py
+worker: python v111_quiz_test_stable.py
