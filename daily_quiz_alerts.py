@@ -161,3 +161,11 @@ def alert_worker():
         except Exception:
             bot.logger.exception("DAILY_QUIZ_ALERT_WORKER_FAILED")
         time.sleep(30)
+
+
+# Install the locked channel-media layer after all alert helpers exist. The media
+# manager wraps schedule._send_text dynamically, so both these channel alerts and
+# the 21:05 final-result announcement use an approved Telegram file_id when one
+# exists. Until admin approval, posts safely remain text-only.
+import channel_media_manager as channel_media_manager
+channel_media_manager.install(v110, schedule)
