@@ -148,6 +148,7 @@ def _feature_guard(compact_menu, quiz_alerts, business_menu=None, dm_reply_handl
         "quiz_result_text_only": result_text_only_ok,
         "quiz_leaderboard_text_only": leaderboard_text_only_ok,
         "daily_quiz_rotation": bool(getattr(v110, "_daily_rotation_installed", False)),
+        "daily_quiz_v2": bool(getattr(v110, "_daily_rotation_v2_installed", False)) and int(getattr(v110, "_daily_question_bank_size", 0)) == 280,
         "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)) and reminder_patch_ok,
         "rewards": callable(getattr(v97, "_issue_award", None)),
         "manual_quiz_rewards_only": getattr(daily_schedule, "AUTO_REWARDS_ENABLED", True) is False,
@@ -174,10 +175,10 @@ def main():
     compact_menu = importlib.import_module("clean_customer_menu")
     quiz_alerts = importlib.import_module("daily_quiz_alerts")
 
-    # Install the rotating daily experience before result wrappers are captured.
-    # Existing campaigns are frozen, so a deployment can never change questions
-    # after players have started. New campaigns use IST, themes and fresh questions.
-    quiz_experience = importlib.import_module("daily_quiz_experience")
+    # Install the rotating V2 experience before result wrappers are captured.
+    # In-progress campaigns are preserved for fairness; fresh campaigns use the
+    # 280-question bank, IST weekday themes and 30-day repeat protection.
+    quiz_experience = importlib.import_module("daily_quiz_experience_v2")
     quiz_experience.install(v110, quiz, daily_schedule, globals())
     daily_schedule._original_today_campaign = v110._ensure_campaign
     v110._today_campaign = daily_schedule._today_campaign_windowed
@@ -223,9 +224,10 @@ def main():
     bot.logger.warning(
         "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off leaderboard_image=off "
         "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
-        "quiz_alerts=10:00/16:00/19:00_IST quiz_rotation=daily theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
-        "quiz_progress=on quiz_badges=on quiz_streaks=on customer_menu=start_and_business_same6 business_greeting_reply=on "
-        "daily_quiz_admin_rewards=on reward_code_display_fix=on legacy_image_quiz=off test_probe=off public_image_worker=off "
+        "quiz_alerts=10:00/16:00/19:00_IST quiz_rotation=v2 bank=280 theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
+        "quiz_answer_reactions=on quiz_q4_progress=on quiz_top3_result=on quiz_badges=on quiz_streaks=on "
+        "customer_menu=start_and_business_same6 business_greeting_reply=on daily_quiz_admin_rewards=on "
+        "reward_code_display_fix=on legacy_image_quiz=off test_probe=off public_image_worker=off "
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
         daily_schedule.SCHEDULE_ENABLED, daily_schedule.AUTO_REWARDS_ENABLED, daily_schedule.RESULT_CHANNEL_ENABLED,
     )
