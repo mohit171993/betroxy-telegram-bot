@@ -3,7 +3,16 @@
 This adds a visible Daily Quiz Rewards entry inside the existing Reward Center.
 Rewards are strictly locked until the daily quiz has closed and the 21:05 IST
 final-result step has completed. Nothing is issued from simply opening the screen:
-the admin must explicitly tap Approve & Issue ₹1,000 after finalisation.
+the admin must explicitly approve the eligible payout after finalisation.
+
+Eligible payout is dynamic:
+- 0 winners -> no payout required
+- 1 winner  -> ₹500
+- 2 winners -> ₹800
+- 3 winners -> ₹1,000
+
+After the public final-result announcement, the primary admin receives one
+private Telegram approval alert. Duplicate protection prevents repeat alerts.
 """
 import html
 from datetime import datetime, timezone
@@ -16,6 +25,10 @@ v89 = v97.v89
 
 _previous_callback = None
 _original_reward_center_keyboard = v97._reward_center_keyboard
+_original_announce_if_due = None
+
+PRIZES = (500, 300, 200)
+MEDALS = ("🥇", "🥈", "🥉")
 
 
 def _today_snapshot():
@@ -26,6 +39,10 @@ def _today_snapshot():
 
 def _period_key(campaign):
     return f"daily_quiz:{campaign['campaign_date']}"
+
+
+def _eligible_total(rows):
+    return sum(PRIZES[: min(3, len(rows))])
 
 
 def _finalization_state(campaign):
@@ -98,34 +115,39 @@ def _status_label(award, finalized=True):
 
 def _screen_text(campaign, rows):
     finalized, gate_message = _finalization_state(campaign)
+    total = _eligible_total(rows)
     lines = [
         "🏆 <b>DAILY QUIZ REWARDS</b>",
         "",
         f"Date: <b>{html.escape(str(campaign.get('campaign_date')))}</b>",
-        "Prize pool: <b>₹1,000</b>",
+        "Maximum daily prize pool: <b>₹1,000</b>",
+        f"Eligible payout today: <b>₹{total}</b>",
         f"Finalisation: <b>{'OPEN FOR APPROVAL ✅' if finalized else 'LOCKED 🔒'}</b>",
         f"{html.escape(gate_message)}",
         "",
     ]
-    prizes = (500, 300, 200)
-    medals = ("🥇", "🥈", "🥉")
     for i in range(3):
         rank = i + 1
         if len(rows) >= rank:
             row = rows[i]
             award = _award_for_rank(campaign, rank) if finalized else None
             lines.append(
-                f"{medals[i]} <b>#{rank} {html.escape(_winner_name(row))}</b> — "
-                f"{int(row.get('correct_count') or 0)}/7 — <b>₹{prizes[i]}</b>\n"
+                f"{MEDALS[i]} <b>#{rank} {html.escape(_winner_name(row))}</b> — "
+                f"{int(row.get('correct_count') or 0)}/7 — <b>₹{PRIZES[i]}</b>\n"
                 f"    Status: <b>{html.escape(_status_label(award, finalized=finalized))}</b>"
             )
         else:
-            lines.append(f"{medals[i]} <b>#{rank}</b> — No completed winner yet — ₹{prizes[i]}")
+            lines.append(f"{MEDALS[i]} <b>#{rank}</b> — No eligible winner — ₹{PRIZES[i]} not issued")
     lines += [""]
-    if finalized:
+    if finalized and total > 0:
         lines += [
-            "Tap <b>Approve & Issue ₹1,000</b> only after checking the final three winners.",
+            f"Tap <b>Approve & Issue ₹{total}</b> after checking the final eligible winner{'s' if len(rows) != 1 else ''}.",
             "Duplicate protection and existing GiftPort balance/mobile checks remain active.",
+        ]
+    elif finalized:
+        lines += [
+            "No eligible winners qualified today, so no reward payout is required.",
+            "No approval action is needed.",
         ]
     else:
         lines += [
@@ -137,12 +159,13 @@ def _screen_text(campaign, rows):
 
 def _screen_keyboard(campaign, rows):
     finalized, _ = _finalization_state(campaign)
-    ready = finalized and len(rows) >= 3
+    total = _eligible_total(rows)
+    ready = finalized and total > 0
     buttons = []
     if ready:
         buttons.append([
             bot.InlineKeyboardButton(
-                "✅ Approve & Issue ₹1,000",
+                f"✅ Approve & Issue ₹{total}",
                 callback_data=f"dq_rewards_approve:{int(campaign['id'])}",
             )
         ])
@@ -190,12 +213,99 @@ def _issue_approved_awards(campaign, rows):
     return results
 
 
+def _admin_alert_rows(campaign, rows):
+    total = _eligible_total(rows)
+    buttons = []
+    if total > 0:
+        buttons.append([{
+            "text": f"✅ Approve & Issue ₹{total}",
+            "callback_data": f"dq_rewards_approve:{int(campaign['id'])}",
+        }])
+    buttons.append([{"text": "🔍 Review Winners", "callback_data": "dq_rewards_today"}])
+    return buttons
+
+
+def _admin_alert_text(campaign, rows):
+    total = _eligible_total(rows)
+    lines = [
+        "🏆 <b>DAILY QUIZ REWARDS — FINAL</b>",
+        "",
+        f"Date: <b>{html.escape(str(campaign.get('campaign_date')))}</b>",
+    ]
+    if rows:
+        lines += [
+            f"Eligible winners: <b>{min(3, len(rows))}</b>",
+            f"Total payout awaiting approval: <b>₹{total}</b>",
+            "",
+        ]
+        for i, row in enumerate(rows[:3]):
+            lines.append(
+                f"{MEDALS[i]} <b>{html.escape(_winner_name(row))}</b> — "
+                f"{int(row.get('correct_count') or 0)}/7 — <b>₹{PRIZES[i]}</b>"
+            )
+        lines += ["", "Tap below to review and approve the eligible payout."]
+    else:
+        lines += [
+            "",
+            "No eligible winners qualified today.",
+            "Payout required: <b>₹0</b>",
+            "No approval action is needed.",
+        ]
+    return "\n".join(lines)
+
+
+def _send_admin_ready_alert(campaign, rows):
+    ready, _ = _finalization_state(campaign)
+    if not ready:
+        return False
+    admin_id = int(bot.ADMIN_ID)
+    delivery_type = "daily_quiz_admin_reward_ready"
+    if schedule.v110._delivery_exists(campaign["id"], str(admin_id), delivery_type):
+        return True
+    try:
+        ok, data = schedule._send_text(
+            admin_id,
+            _admin_alert_text(campaign, rows),
+            _admin_alert_rows(campaign, rows),
+        )
+    except Exception:
+        bot.logger.exception("DAILY_QUIZ_ADMIN_READY_ALERT_FAILED campaign=%s", campaign["id"])
+        return False
+    if ok:
+        payload = data if isinstance(data, dict) else {}
+        mid = ((payload.get("result") or {}).get("message_id"))
+        schedule.v110._mark_delivery(campaign["id"], str(admin_id), delivery_type, mid)
+    bot.logger.warning(
+        "DAILY_QUIZ_ADMIN_READY_ALERT sent=%s campaign=%s winners=%s total=%s duplicate_guard=on",
+        ok, campaign["id"], min(3, len(rows)), _eligible_total(rows),
+    )
+    return bool(ok)
+
+
 def install():
-    global _previous_callback
+    global _previous_callback, _original_announce_if_due
     _previous_callback = bot.callback_handler
 
     v97._reward_center_keyboard = _patched_reward_center_keyboard
     v89._reward_center_keyboard = _patched_reward_center_keyboard
+
+    # Wrap the schedule worker's final-result check. The original function posts
+    # the public result and marks it delivered; after that succeeds (or if it was
+    # already delivered on a previous cycle), send one admin-only approval alert.
+    _original_announce_if_due = schedule._announce_if_due
+
+    def _announce_and_alert():
+        result = _original_announce_if_due()
+        try:
+            campaign, rows = _today_snapshot()
+            if _finalization_state(campaign)[0]:
+                _stage_today(campaign, rows)
+                _send_admin_ready_alert(campaign, rows)
+        except Exception:
+            bot.logger.exception("DAILY_QUIZ_ADMIN_POST_RESULT_ALERT_FAILED")
+        return result
+
+    schedule._announce_if_due = _announce_and_alert
 
     async def daily_quiz_reward_callback(update, context):
         q = getattr(update, "callback_query", None)
@@ -233,12 +343,18 @@ def install():
                 await q.answer(reason, show_alert=True)
                 return
             rows = schedule._final_rows(campaign_id)
-            if len(rows) < 3:
-                await q.answer("Three completed winners are required.", show_alert=True)
+            total = _eligible_total(rows)
+            if total <= 0:
+                await q.answer("No eligible winners. No payout is required.", show_alert=True)
                 return
-            await q.answer("Issuing approved rewards…")
+            await q.answer(f"Issuing approved rewards: ₹{total}…")
             results = _issue_approved_awards(campaign, rows)
-            lines = ["✅ <b>DAILY QUIZ REWARD APPROVAL PROCESSED</b>", ""]
+            lines = [
+                "✅ <b>DAILY QUIZ REWARD APPROVAL PROCESSED</b>",
+                "",
+                f"Approved total: <b>₹{total}</b>",
+                "",
+            ]
             for rank, amount, status, _ in sorted(results):
                 lines.append(f"#{rank} ₹{amount}: <b>{html.escape(_status_label({'status': status}))}</b>")
             lines += ["", "The action is idempotent: already-issued awards are not purchased again."]
@@ -248,8 +364,9 @@ def install():
                 reply_markup=_screen_keyboard(campaign, rows),
             )
             bot.logger.warning(
-                "DAILY_QUIZ_ADMIN_APPROVAL admin=%s campaign=%s results=%s",
-                q.from_user.id, campaign_id, [(r, a, s) for r, a, s, _ in results],
+                "DAILY_QUIZ_ADMIN_APPROVAL admin=%s campaign=%s winners=%s total=%s results=%s",
+                q.from_user.id, campaign_id, min(3, len(rows)), total,
+                [(r, a, s) for r, a, s, _ in results],
             )
             return
 
@@ -257,7 +374,7 @@ def install():
 
     bot.callback_handler = daily_quiz_reward_callback
     bot.logger.warning(
-        "DAILY_QUIZ_ADMIN_REWARDS active=on admin_only=on manual_approval=on pool=1000 "
-        "approval_gate=21:05_IST+final_result_announced"
+        "DAILY_QUIZ_ADMIN_REWARDS active=on admin_only=on manual_approval=on dynamic_payout=0/500/800/1000 "
+        "admin_ready_alert=on duplicate_guard=on approval_gate=21:05_IST+final_result_announced"
     )
     return daily_quiz_reward_callback
