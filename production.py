@@ -29,7 +29,6 @@ def _feature_guard(compact_menu, quiz_alerts):
         int(getattr(daily_schedule, "QUESTION_SECONDS", 0)) == 30
         and getattr(v110, "_send_question_to_user", None) is getattr(daily_schedule, "_send_question_30s", None)
     )
-    # V87's actual worker patch function is named _v87_worker_cycle.
     reminder_patch_ok = getattr(v83, "_worker_cycle", None) is getattr(reminder, "_v87_worker_cycle", None)
 
     required = {
@@ -52,11 +51,16 @@ def _feature_guard(compact_menu, quiz_alerts):
 
 def main():
     v110._ensure_schema()
-
     v111._compatibility_selftest()
 
     compact_menu = importlib.import_module("clean_customer_menu")
     quiz_alerts = importlib.import_module("daily_quiz_alerts")
+
+    # Re-assert the approved V87 reminder patch after all optional imports.
+    # Some older modules in the import chain can replace v83._worker_cycle.
+    reminder.v83._worker_cycle = reminder._v87_worker_cycle
+    v83._worker_cycle = reminder._v87_worker_cycle
+
     _feature_guard(compact_menu, quiz_alerts)
 
     v97._startup_diagnostic()
