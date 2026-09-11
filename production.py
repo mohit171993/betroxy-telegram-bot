@@ -1,8 +1,4 @@
-"""Permanent BETROXY production entrypoint.
-
-Do not replace this file with versioned launchers. New features should be modules
-loaded here so previously approved workers cannot silently disappear.
-"""
+"""Permanent BETROXY production entrypoint."""
 import threading
 import time
 
@@ -10,6 +6,8 @@ import bot
 import v113_text_quiz_ux as quiz
 import v87_single_optin_reminder as reminder
 import daily_quiz_schedule as daily_schedule
+import clean_customer_menu as compact_menu
+import daily_quiz_alerts as quiz_alerts
 
 v110 = quiz.v110
 v111 = quiz.v111
@@ -22,16 +20,14 @@ v88 = v110.v88
 v85 = v110.v85
 v83 = v110.v83
 
-# Production UX policy: questions are Telegram text + answer buttons.
-# Legacy V110 hero/test image senders must never be started from production.py.
-# The public image worker is deliberately NOT started here.
-
 REQUIRED_FEATURES = {
     "quiz_text": callable(getattr(v110, "_send_question_to_user", None)),
     "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)),
     "rewards": callable(getattr(v97, "_issue_award", None)),
     "engagement": callable(getattr(v83, "_worker_loop", None)),
     "daily_schedule": callable(getattr(daily_schedule, "schedule_worker", None)),
+    "quiz_alerts": callable(getattr(quiz_alerts, "alert_worker", None)),
+    "compact_menu": callable(getattr(compact_menu, "compact_public_menu", None)),
 }
 
 
@@ -45,7 +41,6 @@ def _feature_guard():
 
 def main():
     v110._ensure_schema()
-    # Do not run V110 _selftest here: it renders legacy quiz graphics.
     v111._compatibility_selftest()
     _feature_guard()
 
@@ -57,19 +52,17 @@ def main():
     v88.v63.apply_signup_cta()
     v85._enable_smart_reply_without_reset()
 
-    # v87 patches the engagement worker cycle at import time, preserving the
-    # one-time opt-in reminder. No V110 public/image worker or test probe runs.
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
-
-    # This worker is safe to include because it is hard-gated by
-    # QUIZ_SCHEDULE_ENABLED=1. Default is OFF until explicitly approved live.
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
+    threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
 
     bot.logger.warning(
-        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on reminders=on "
-        "legacy_image_quiz=off test_probe=off public_image_worker=off "
-        "daily_schedule_enabled=%s",
+        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on reminders=on compact_menu=on "
+        "quiz_alerts=10:00/19:00_Dubai legacy_image_quiz=off test_probe=off public_image_worker=off "
+        "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
         daily_schedule.SCHEDULE_ENABLED,
+        daily_schedule.AUTO_REWARDS_ENABLED,
+        daily_schedule.RESULT_CHANNEL_ENABLED,
     )
     time.sleep(12)
     bot.main()
