@@ -5,6 +5,7 @@ and URLs are preserved; secondary actions move into submenus.
 """
 import bot
 import v96_customer_menu_final as v96
+import v53_attractive_customer_experience_bootstrap as v53
 
 _old_menu = bot.public_menu
 _old_callback = bot.callback_handler
@@ -30,7 +31,11 @@ def _clone(b, label):
     if not b:
         return None
     kwargs = {}
-    for attr in ("url", "callback_data", "web_app", "login_url", "switch_inline_query", "switch_inline_query_current_chat", "callback_game", "pay", "switch_inline_query_chosen_chat", "copy_text"):
+    for attr in (
+        "url", "callback_data", "web_app", "login_url", "switch_inline_query",
+        "switch_inline_query_current_chat", "callback_game", "pay",
+        "switch_inline_query_chosen_chat", "copy_text",
+    ):
         value = getattr(b, attr, None)
         if value is not None:
             kwargs[attr] = value
@@ -43,12 +48,16 @@ def compact_public_menu(user_id=None):
     rewards = _clone(_find(user_id, "my rewards"), "🎁 My Rewards")
     support = _clone(_find(user_id, "help & support", "support"), "🎧 Help & Support")
     rows = []
-    if app: rows.append([app])
-    if quiz: rows.append([quiz])
-    if rewards: rows.append([rewards])
+    if app:
+        rows.append([app])
+    if quiz:
+        rows.append([quiz])
+    if rewards:
+        rows.append([rewards])
     rows.append([bot.InlineKeyboardButton("👤 My Account", callback_data="compact_account")])
     rows.append([bot.InlineKeyboardButton("📢 Updates & Promotions", callback_data="compact_updates")])
-    if support: rows.append([support])
+    if support:
+        rows.append([support])
     return bot.InlineKeyboardMarkup(rows)
 
 
@@ -102,7 +111,13 @@ async def compact_callback_handler(update, context):
     return await _old_callback(update, context)
 
 
+# Patch every live menu reference that the preserved /start chain resolves at call time.
+# This keeps referral/deep-link/start side effects untouched and only swaps the renderer.
 bot.public_menu = compact_public_menu
 v96.v96_public_menu = compact_public_menu
+v53.v53_public_menu = compact_public_menu
 bot.callback_handler = compact_callback_handler
-bot.logger.warning("COMPACT_CUSTOMER_MENU active=on primary_actions=6 secondary_actions=preserved")
+
+bot.logger.warning(
+    "COMPACT_CUSTOMER_MENU active=on primary_actions=6 secondary_actions=preserved start_renderer=patched"
+)
