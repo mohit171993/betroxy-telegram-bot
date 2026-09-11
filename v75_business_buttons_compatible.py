@@ -22,7 +22,7 @@ v59 = v74.v59
 PLAY_NOW_URL = v72.PLAY_NOW_URL
 WEBSITE_URL = "https://betroxy.com/"
 SUPPORT_URL = "https://t.me/betroxysports"
-UPDATES_URL = "https://t.me/betroxycasino"
+UPDATES_URL = "https://t.me/betroxyupdates"
 REFER_URL = "https://t.me/BetroxyOfficialBot?start=refer"
 HOW_URL = WEBSITE_URL
 
@@ -79,7 +79,7 @@ async def _send_business_reply(context, enquiry, intent):
             await context.bot.send_photo(
                 chat_id=int(enquiry["customer_chat_id"]),
                 photo=v63.BANNER_URL,
-                caption="✨ <b>BETROXY</b> • Official Access & Support",
+                caption="✨ <b>BETROXY</b> • Daily Quiz & Rewards",
                 parse_mode=bot.ParseMode.HTML,
                 business_connection_id=str(enquiry["connection_id"]),
             )
