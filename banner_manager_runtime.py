@@ -105,20 +105,51 @@ def _patch_business_banner():
 
     async def dynamic_business_send(context, enquiry, intent):
         first_reply = not bool(enquiry.get("auto_ack_sent_at"))
-        file_id = banner_manager.get_welcome_file_id("business") if first_reply else None
+        intent_name = str(intent or "").strip().lower()
+        # Welcome-style replies should visually lead with the approved banner.
+        # This includes returning customers who send a fresh greeting such as
+        # "Hi"; product/support follow-ups stay text-first to avoid banner spam.
+        show_banner = first_reply or intent_name in {"greeting", "general"}
+        file_id = banner_manager.get_welcome_file_id("business") if show_banner else None
         if not file_id:
             return await previous_send(context, enquiry, intent)
 
-        # V75 resolves v63.BANNER_URL at send time. Swap only for this call and
-        # restore in finally. Business messages are serialized by Telegram's update
-        # processing in normal operation; all failures still fall back safely.
         old_banner = v75.v63.BANNER_URL
         try:
-            v75.v63.BANNER_URL = file_id
-            result = await previous_send(context, enquiry, intent)
+            if first_reply:
+                # The legacy sender already emits its banner on first reply. Swap
+                # the source for this call so it uses the admin-approved file_id.
+                v75.v63.BANNER_URL = file_id
+                result = await previous_send(context, enquiry, intent)
+            else:
+                # Returning greeting/general enquiry: the legacy sender skips the
+                # image because auto_ack_sent_at already exists. Send the approved
+                # Business banner explicitly into the same Business connection,
+                # then let the existing sender deliver the quiz text/buttons.
+                try:
+                    await context.bot.send_photo(
+                        chat_id=int(enquiry["customer_chat_id"]),
+                        photo=file_id,
+                        caption="✨ <b>BETROXY</b> • Daily Quiz & Rewards",
+                        parse_mode=bot.ParseMode.HTML,
+                        business_connection_id=str(enquiry["connection_id"]),
+                    )
+                    bot.logger.warning(
+                        "BANNER_MANAGER_BUSINESS_GREETING_BANNER_SENT enquiry=%s intent=%s returning=true",
+                        enquiry.get("id"), intent_name,
+                    )
+                except Exception:
+                    # Never block the actual Business reply if Telegram rejects an
+                    # image. Text/buttons must still be delivered.
+                    bot.logger.exception(
+                        "BANNER_MANAGER_BUSINESS_GREETING_BANNER_FAILED enquiry=%s intent=%s text_reply_continues=on",
+                        enquiry.get("id"), intent_name,
+                    )
+                result = await previous_send(context, enquiry, intent)
+
             bot.logger.warning(
-                "BANNER_MANAGER_BUSINESS_SENT enquiry=%s source=approved_telegram_file_id",
-                enquiry.get("id"),
+                "BANNER_MANAGER_BUSINESS_SENT enquiry=%s source=approved_telegram_file_id first_reply=%s intent=%s",
+                enquiry.get("id"), first_reply, intent_name,
             )
             return result
         except Exception:
@@ -133,7 +164,9 @@ def _patch_business_banner():
     v75._send_business_reply = dynamic_business_send
     # V51/V75 route Business smart replies through this runtime pointer.
     v75.biz51._send_smart_reply = dynamic_business_send
-    bot.logger.warning("BANNER_MANAGER_BUSINESS_RUNTIME active=on dynamic_file_id=on legacy_fallback=on")
+    bot.logger.warning(
+        "BANNER_MANAGER_BUSINESS_RUNTIME active=on dynamic_file_id=on legacy_fallback=on greeting_banner=on"
+    )
 
 
 def install():
