@@ -53,6 +53,16 @@ def install():
         bot.logger.exception("BUSINESS_FOLLOWUP_POLICY_INSTALL_FAILED")
         raise
 
+    # Normal new Business leads should not interrupt the admin. Keep every lead
+    # stored and auto-replied to, but suppress the green NEW BUSINESS LEAD card.
+    # Red attention and reopened-conversation alerts remain enabled.
+    try:
+        import business_alert_quiet_mode
+        business_alert_quiet_mode.install()
+    except Exception:
+        bot.logger.exception("BUSINESS_ALERT_QUIET_MODE_INSTALL_FAILED")
+        raise
+
     # One-time public connection verification requested after the bot was added
     # as channel admin. This uses the real production schedule/media path, then
     # removes its temporary test post automatically.
@@ -65,6 +75,7 @@ def install():
 
     bot.logger.warning(
         "FIXED_CHANNEL_IMAGE_TEST deprecated=on active=off replacement=channel_media_manager_admin_upload "
-        "welcome_v2=on banner_manager=on banner_bulk_upload=on channel_rotation=round_robin_daily_IST"
+        "welcome_v2=on banner_manager=on banner_bulk_upload=on business_new_lead_popup=off "
+        "business_attention_alerts=on channel_rotation=round_robin_daily_IST"
     )
     return bot.callback_handler
