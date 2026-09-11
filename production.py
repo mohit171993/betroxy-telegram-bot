@@ -184,6 +184,8 @@ def main():
     # 280-question bank, IST weekday themes and 30-day repeat protection.
     quiz_experience = importlib.import_module("daily_quiz_experience_v2")
     quiz_experience.install(v110, quiz, daily_schedule, globals())
+    quiz_completion_timeline = importlib.import_module("quiz_completion_timeline")
+    quiz_completion_timeline.install(globals())
     daily_schedule._original_today_campaign = v110._ensure_campaign
     v110._today_campaign = daily_schedule._today_campaign_windowed
 
@@ -235,7 +237,7 @@ def main():
         "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off leaderboard_image=off "
         "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
         "quiz_alerts=10:00/16:00/19:00_IST quiz_rotation=v2 bank=280 theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
-        "quiz_answer_reactions=on quiz_q4_progress=on quiz_top3_result=on quiz_badges=on quiz_streaks=on "
+        "quiz_answer_reactions=on quiz_q4_progress=on quiz_top3_result=on quiz_badges=on quiz_streaks=on quiz_completion_timeline=on "
         "customer_menu=start_and_business_same6 business_greeting_reply=on daily_quiz_admin_rewards=on "
         "reward_code_display_fix=on fixed_channel_test=private_only legacy_image_quiz=off test_probe=off public_image_worker=off "
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
