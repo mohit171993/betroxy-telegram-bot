@@ -29,7 +29,8 @@ def _feature_guard(compact_menu, quiz_alerts):
         int(getattr(daily_schedule, "QUESTION_SECONDS", 0)) == 30
         and getattr(v110, "_send_question_to_user", None) is getattr(daily_schedule, "_send_question_30s", None)
     )
-    reminder_patch_ok = getattr(v83, "_worker_cycle", None) is getattr(reminder, "_worker_cycle_v87", None)
+    # V87's actual worker patch function is named _v87_worker_cycle.
+    reminder_patch_ok = getattr(v83, "_worker_cycle", None) is getattr(reminder, "_v87_worker_cycle", None)
 
     required = {
         "quiz_text": callable(getattr(v110, "_send_question_to_user", None)),
@@ -52,8 +53,6 @@ def _feature_guard(compact_menu, quiz_alerts):
 def main():
     v110._ensure_schema()
 
-    # Validate preserved legacy routes first. Optional UI modules are loaded only
-    # afterwards so their intentional patches cannot invalidate compatibility checks.
     v111._compatibility_selftest()
 
     compact_menu = importlib.import_module("clean_customer_menu")
