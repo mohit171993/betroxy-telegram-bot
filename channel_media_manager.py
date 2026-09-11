@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import threading
 import time
 from pathlib import Path
@@ -45,10 +44,17 @@ _installed = False
 
 
 def _source_bytes(asset_key: str) -> bytes:
+    """Decode a bundled JPEG, tolerating line wrapping/whitespace in .b64 files."""
     spec = ASSETS[asset_key]
     path = Path(__file__).resolve().parent / spec["source"]
-    raw = path.read_text(encoding="ascii").strip()
-    data = base64.b64decode(raw, validate=True)
+    raw = path.read_text(encoding="ascii")
+    # GitHub/text tooling may wrap long base64 lines. Strip all whitespace before
+    # strict validation so a harmless newline can never crash production.
+    clean = "".join(raw.split())
+    try:
+        data = base64.b64decode(clean, validate=True)
+    except Exception as exc:
+        raise ValueError(f"{asset_key} invalid base64: {exc}") from exc
     if not data.startswith(b"\xff\xd8\xff"):
         raise ValueError(f"{asset_key} source is not a JPEG")
     return data
@@ -81,16 +87,17 @@ def _ensure_schema():
 
 
 def _prepare_asset_rows():
-    """Register source hashes and invalidate approval only if source changed."""
+    """Register source hashes; one bad asset must never take down the bot."""
     _ensure_schema()
     with bot.get_db() as conn:
         with conn.cursor() as cur:
             for asset_key, spec in ASSETS.items():
-                sha = _source_sha(asset_key)
-                cur.execute(
-                    "SELECT * FROM channel_media_assets WHERE asset_key=%s",
-                    (asset_key,),
-                )
+                try:
+                    sha = _source_sha(asset_key)
+                except Exception:
+                    bot.logger.exception("CHANNEL_MEDIA_SOURCE_INVALID asset=%s", asset_key)
+                    continue
+                cur.execute("SELECT * FROM channel_media_assets WHERE asset_key=%s", (asset_key,))
                 row = cur.fetchone()
                 if not row:
                     cur.execute(
@@ -123,10 +130,7 @@ def _prepare_asset_rows():
 def _asset_row(asset_key: str):
     with bot.get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM channel_media_assets WHERE asset_key=%s",
-                (asset_key,),
-            )
+            cur.execute("SELECT * FROM channel_media_assets WHERE asset_key=%s", (asset_key,))
             return cur.fetchone()
 
 
@@ -134,8 +138,7 @@ def _approved_file_id(asset_key: str):
     row = _asset_row(asset_key) or {}
     if str(row.get("status") or "") != "approved":
         return None
-    file_id = str(row.get("approved_file_id") or "").strip()
-    return file_id or None
+    return str(row.get("approved_file_id") or "").strip() or None
 
 
 def _api(method: str, *, data=None, files=None, timeout=25):
@@ -150,14 +153,10 @@ def _api(method: str, *, data=None, files=None, timeout=25):
 
 def _preview_markup(asset_key: str):
     return json.dumps(
-        {
-            "inline_keyboard": [
-                [
-                    {"text": "✅ Approve & Lock", "callback_data": f"channel_media:approve:{asset_key}"},
-                    {"text": "❌ Reject", "callback_data": f"channel_media:reject:{asset_key}"},
-                ]
-            ]
-        },
+        {"inline_keyboard": [[
+            {"text": "✅ Approve & Lock", "callback_data": f"channel_media:approve:{asset_key}"},
+            {"text": "❌ Reject", "callback_data": f"channel_media:reject:{asset_key}"},
+        ]]},
         separators=(",", ":"),
     )
 
@@ -169,18 +168,21 @@ def _send_preview(asset_key: str, force=False):
             return False
         if row.get("pending_file_id"):
             return False
+    try:
+        photo = _source_bytes(asset_key)
+    except Exception:
+        bot.logger.exception("CHANNEL_MEDIA_PREVIEW_SOURCE_FAILED asset=%s", asset_key)
+        return False
 
     spec = ASSETS[asset_key]
-    photo = _source_bytes(asset_key)
-    caption = (
-        "🖼 <b>BETROXY CHANNEL MEDIA PREVIEW</b>\n\n"
-        f"Slot: <b>{spec['label']}</b>\n\n"
-        "This image is <b>NOT public yet</b>.\n"
-        "Approve it once to lock the exact Telegram <code>file_id</code> for automatic reuse."
-    )
     data = {
         "chat_id": str(bot.ADMIN_ID),
-        "caption": caption,
+        "caption": (
+            "🖼 <b>BETROXY CHANNEL MEDIA PREVIEW</b>\n\n"
+            f"Slot: <b>{spec['label']}</b>\n\n"
+            "This image is <b>NOT public yet</b>.\n"
+            "Approve it once to lock the exact Telegram <code>file_id</code> for automatic reuse."
+        ),
         "parse_mode": "HTML",
         "reply_markup": _preview_markup(asset_key),
     }
@@ -193,7 +195,6 @@ def _send_preview(asset_key: str, force=False):
             payload.get("description") if isinstance(payload, dict) else payload,
         )
         return False
-
     result = payload.get("result") or {}
     photos = result.get("photo") or []
     file_id = str((photos[-1] or {}).get("file_id") or "") if photos else ""
@@ -201,7 +202,6 @@ def _send_preview(asset_key: str, force=False):
     if not file_id:
         bot.logger.error("CHANNEL_MEDIA_PREVIEW_FAILED asset=%s detail=no_file_id", asset_key)
         return False
-
     with bot.get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -213,28 +213,11 @@ def _send_preview(asset_key: str, force=False):
                 (file_id, message_id, asset_key),
             )
         conn.commit()
-    bot.logger.warning(
-        "CHANNEL_MEDIA_PREVIEW_SENT asset=%s message_id=%s public=off",
-        asset_key,
-        message_id,
-    )
+    bot.logger.warning("CHANNEL_MEDIA_PREVIEW_SENT asset=%s message_id=%s public=off", asset_key, message_id)
     return True
 
 
-def _preview_worker():
-    time.sleep(7)
-    try:
-        _prepare_asset_rows()
-        for asset_key in ASSETS:
-            _send_preview(asset_key)
-            time.sleep(0.5)
-        _check_channel_permission()
-    except Exception:
-        bot.logger.exception("CHANNEL_MEDIA_PREVIEW_WORKER_FAILED")
-
-
 def _check_channel_permission():
-    """Log channel admin/posting capability; never blocks the rest of the bot."""
     try:
         ok_me, me = _api("getMe", data={})
         if not ok_me:
@@ -254,16 +237,33 @@ def _check_channel_permission():
         info = member.get("result") or {}
         status = str(info.get("status") or "")
         can_post = status == "creator" or (status == "administrator" and bool(info.get("can_post_messages")))
+        can_edit = status == "creator" or (status == "administrator" and bool(info.get("can_edit_messages")))
         bot.logger.warning(
-            "CHANNEL_MEDIA_CHANNEL_CHECK channel=%s status=%s can_post=%s",
+            "CHANNEL_MEDIA_CHANNEL_CHECK channel=%s status=%s can_post=%s can_edit=%s",
             _v110.CHANNEL_CHAT,
             status,
             can_post,
+            can_edit,
         )
         return can_post
     except Exception:
         bot.logger.exception("CHANNEL_MEDIA_CHANNEL_CHECK_FAILED channel=%s", getattr(_v110, "CHANNEL_CHAT", None))
         return False
+
+
+def _preview_worker():
+    time.sleep(7)
+    try:
+        _prepare_asset_rows()
+        for asset_key in ASSETS:
+            try:
+                _send_preview(asset_key)
+            except Exception:
+                bot.logger.exception("CHANNEL_MEDIA_PREVIEW_WORKER_ASSET_FAILED asset=%s", asset_key)
+            time.sleep(0.5)
+        _check_channel_permission()
+    except Exception:
+        bot.logger.exception("CHANNEL_MEDIA_PREVIEW_WORKER_FAILED")
 
 
 def _classify_channel_text(text: str):
@@ -303,18 +303,12 @@ def _install_channel_send_wrapper():
             return _original_send_text(chat_id, text, rows)
         file_id = _approved_file_id(asset_key)
         if not file_id:
-            bot.logger.warning(
-                "CHANNEL_MEDIA_POST asset=%s mode=text_fallback reason=not_approved",
-                asset_key,
-            )
+            bot.logger.warning("CHANNEL_MEDIA_POST asset=%s mode=text_fallback reason=not_approved", asset_key)
             return _original_send_text(chat_id, text, rows)
-
         ok, payload = _send_photo_by_file_id(chat_id, file_id, text, rows)
         if ok:
             bot.logger.warning("CHANNEL_MEDIA_POST asset=%s mode=locked_file_id", asset_key)
             return ok, payload
-
-        # Fail safe: never substitute another image. Preserve the alert as text.
         bot.logger.error(
             "CHANNEL_MEDIA_POST_FAILED asset=%s mode=locked_file_id detail=%s fallback=text",
             asset_key,
@@ -328,8 +322,7 @@ def _install_channel_send_wrapper():
 
 def _approve(asset_key: str, admin_id: int):
     row = _asset_row(asset_key) or {}
-    pending = str(row.get("pending_file_id") or "").strip()
-    if not pending:
+    if not str(row.get("pending_file_id") or "").strip():
         return False
     with bot.get_db() as conn:
         with conn.cursor() as cur:
@@ -375,7 +368,6 @@ def _install_admin_callback():
         if int(q.from_user.id) != int(bot.ADMIN_ID):
             await q.answer("Admin only", show_alert=True)
             return
-
         parts = data.split(":", 2)
         if len(parts) != 3 or parts[2] not in ASSETS:
             await q.answer("Invalid media action", show_alert=True)
@@ -411,7 +403,7 @@ def _install_admin_callback():
                     caption=(
                         "❌ <b>REJECTED — NOT PUBLIC</b>\n\n"
                         f"Slot: <b>{label}</b>\n\n"
-                        "This image will not be used. Tap Preview Again only when you want to review the bundled creative again."
+                        "This image will not be used."
                     ),
                     parse_mode=bot.ParseMode.HTML,
                     reply_markup=bot.InlineKeyboardMarkup([
@@ -425,23 +417,19 @@ def _install_admin_callback():
 
         if action == "retry":
             await q.answer("Sending a new preview…")
-            try:
-                with bot.get_db() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            """
-                            UPDATE channel_media_assets
-                            SET status='needs_review',pending_file_id=NULL,preview_message_id=NULL,updated_at=NOW()
-                            WHERE asset_key=%s
-                            """,
-                            (asset_key,),
-                        )
-                    conn.commit()
-                sent = _send_preview(asset_key, force=True)
-                if not sent:
-                    await q.message.reply_text("⚠️ Could not send the preview. Check production logs.")
-            except Exception:
-                bot.logger.exception("CHANNEL_MEDIA_RETRY_FAILED asset=%s", asset_key)
+            with bot.get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE channel_media_assets
+                        SET status='needs_review',pending_file_id=NULL,preview_message_id=NULL,updated_at=NOW()
+                        WHERE asset_key=%s
+                        """,
+                        (asset_key,),
+                    )
+                conn.commit()
+            if not _send_preview(asset_key, force=True):
+                await q.message.reply_text("⚠️ Could not send the preview. Check production logs.")
             return
 
         await q.answer("Unsupported media action", show_alert=True)
