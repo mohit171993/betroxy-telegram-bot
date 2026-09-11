@@ -1,1 +1,1 @@
-worker: python v105_indian_mobile_rewards.py
+worker: python v107_mobile_prompt_state_fix.py
