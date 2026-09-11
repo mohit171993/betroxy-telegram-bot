@@ -3,8 +3,6 @@ import time
 
 import bot
 import v86_live_sports_autopilot as v86
-import daily_quiz_schedule as daily_schedule
-import engagement_strategy_v2
 
 v83 = v86.v83
 v85 = v86.v85
@@ -85,11 +83,6 @@ def _v87_worker_cycle(force=False):
 
 
 v83._worker_cycle = _v87_worker_cycle
-
-# Production engagement policy: channel carries frequent activity, while private
-# proactive outreach is capped at one per user per IST day. This also retires the
-# legacy points-based Sports Challenge in favor of the real ₹1,000 Daily Quiz.
-engagement_strategy_v2.install(v83, daily_schedule)
 
 bot.logger.warning(
     "V87_SINGLE_OPTIN_REMINDER active=on delay=3d max_reminders=1 consent_required_after_reminder=on daily_quiz_focus=on"
