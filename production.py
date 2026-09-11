@@ -211,6 +211,12 @@ def main():
     reward_display_fix.install(v97, v97.v89, v83)
 
     _feature_guard(compact_menu, quiz_alerts, business_menu, dm_reply_handler, admin_rewards_handler)
+
+    # Private fixed-image approval test only. This is deliberately installed
+    # after the production feature guard and does not publish to the channel.
+    fixed_channel_test = importlib.import_module("fixed_channel_image_test")
+    fixed_channel_test.install()
+
     v97._startup_diagnostic()
     v96._startup_diagnostic()
     v93._startup_pdf_diagnostic()
@@ -227,7 +233,7 @@ def main():
         "quiz_alerts=10:00/16:00/19:00_IST quiz_rotation=v2 bank=280 theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
         "quiz_answer_reactions=on quiz_q4_progress=on quiz_top3_result=on quiz_badges=on quiz_streaks=on "
         "customer_menu=start_and_business_same6 business_greeting_reply=on daily_quiz_admin_rewards=on "
-        "reward_code_display_fix=on legacy_image_quiz=off test_probe=off public_image_worker=off "
+        "reward_code_display_fix=on fixed_channel_test=private_only legacy_image_quiz=off test_probe=off public_image_worker=off "
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
         daily_schedule.SCHEDULE_ENABLED, daily_schedule.AUTO_REWARDS_ENABLED, daily_schedule.RESULT_CHANNEL_ENABLED,
     )
