@@ -1,4 +1,5 @@
 """Permanent BETROXY production entrypoint."""
+import importlib
 import threading
 import time
 
@@ -6,8 +7,6 @@ import bot
 import v113_text_quiz_ux as quiz
 import v87_single_optin_reminder as reminder
 import daily_quiz_schedule as daily_schedule
-import clean_customer_menu as compact_menu
-import daily_quiz_alerts as quiz_alerts
 
 v110 = quiz.v110
 v111 = quiz.v111
@@ -20,20 +19,19 @@ v88 = v110.v88
 v85 = v110.v85
 v83 = v110.v83
 
-REQUIRED_FEATURES = {
-    "quiz_text": callable(getattr(v110, "_send_question_to_user", None)),
-    "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)),
-    "rewards": callable(getattr(v97, "_issue_award", None)),
-    "engagement": callable(getattr(v83, "_worker_loop", None)),
-    "daily_schedule": callable(getattr(daily_schedule, "schedule_worker", None)),
-    "quiz_alerts": callable(getattr(quiz_alerts, "alert_worker", None)),
-    "compact_menu": callable(getattr(compact_menu, "compact_public_menu", None)),
-}
 
-
-def _feature_guard():
-    missing = [name for name, ok in REQUIRED_FEATURES.items() if not ok]
-    state = " ".join(f"{name}={'ON' if ok else 'OFF'}" for name, ok in REQUIRED_FEATURES.items())
+def _feature_guard(compact_menu, quiz_alerts):
+    required = {
+        "quiz_text": callable(getattr(v110, "_send_question_to_user", None)),
+        "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)),
+        "rewards": callable(getattr(v97, "_issue_award", None)),
+        "engagement": callable(getattr(v83, "_worker_loop", None)),
+        "daily_schedule": callable(getattr(daily_schedule, "schedule_worker", None)),
+        "quiz_alerts": callable(getattr(quiz_alerts, "alert_worker", None)),
+        "compact_menu": callable(getattr(compact_menu, "compact_public_menu", None)),
+    }
+    missing = [name for name, ok in required.items() if not ok]
+    state = " ".join(f"{name}={'ON' if ok else 'OFF'}" for name, ok in required.items())
     bot.logger.warning("PRODUCTION_FEATURE_GUARD %s legacy_image_quiz=OFF test_probe=OFF", state)
     if missing:
         raise RuntimeError("Required BETROXY features missing: " + ", ".join(missing))
@@ -41,8 +39,15 @@ def _feature_guard():
 
 def main():
     v110._ensure_schema()
+
+    # Run compatibility checks before importing optional UI modules. Some UI
+    # modules intentionally patch callback/menu handlers, which would otherwise
+    # make the legacy compatibility assertion fail even though the routes work.
     v111._compatibility_selftest()
-    _feature_guard()
+
+    compact_menu = importlib.import_module("clean_customer_menu")
+    quiz_alerts = importlib.import_module("daily_quiz_alerts")
+    _feature_guard(compact_menu, quiz_alerts)
 
     v97._startup_diagnostic()
     v96._startup_diagnostic()
