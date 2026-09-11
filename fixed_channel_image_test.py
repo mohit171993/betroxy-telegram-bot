@@ -40,6 +40,8 @@ def install():
     try:
         import banner_bulk_upload
         banner_bulk_upload.install()
+        import banner_bulk_document_support
+        banner_bulk_document_support.install()
     except Exception:
         bot.logger.exception("BANNER_BULK_UPLOAD_INSTALL_FAILED")
         raise
@@ -75,7 +77,7 @@ def install():
 
     bot.logger.warning(
         "FIXED_CHANNEL_IMAGE_TEST deprecated=on active=off replacement=channel_media_manager_admin_upload "
-        "welcome_v2=on banner_manager=on banner_bulk_upload=on business_new_lead_popup=off "
-        "business_attention_alerts=on channel_rotation=round_robin_daily_IST"
+        "welcome_v2=on banner_manager=on banner_bulk_upload=on banner_bulk_documents=on "
+        "business_new_lead_popup=off business_attention_alerts=on channel_rotation=round_robin_daily_IST"
     )
     return bot.callback_handler
