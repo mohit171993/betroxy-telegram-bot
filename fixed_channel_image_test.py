@@ -11,6 +11,16 @@ import bot
 
 
 def install():
+    # Apply the final customer-facing welcome presentation only after the main
+    # production feature guard has validated the stable underlying routes.
+    try:
+        import clean_customer_menu
+        import welcome_experience_v2
+        welcome_experience_v2.install(clean_customer_menu, clean_customer_menu.v83.v75)
+    except Exception:
+        bot.logger.exception("WELCOME_EXPERIENCE_V2_INSTALL_FAILED")
+        raise
+
     # Install the Business enquiry follow-up policy after all legacy engagement
     # modules have loaded so V83's worker resolves the patched selector at runtime.
     try:
@@ -21,8 +31,8 @@ def install():
         raise
 
     # One-time public connection verification requested after the bot was added
-    # as @betroxycasino admin. This uses the real production schedule/media path,
-    # then removes its temporary test post automatically.
+    # as channel admin. This uses the real production schedule/media path, then
+    # removes its temporary test post automatically.
     try:
         import channel_connection_test
         channel_connection_test.start()
@@ -31,6 +41,6 @@ def install():
         raise
 
     bot.logger.warning(
-        "FIXED_CHANNEL_IMAGE_TEST deprecated=on active=off replacement=channel_media_manager_admin_upload"
+        "FIXED_CHANNEL_IMAGE_TEST deprecated=on active=off replacement=channel_media_manager_admin_upload welcome_v2=on"
     )
     return bot.callback_handler
