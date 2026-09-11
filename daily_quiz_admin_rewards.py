@@ -1,7 +1,7 @@
 """Admin-only approval flow for today's BETROXY Daily Quiz rewards.
 
 This adds a visible Daily Quiz Rewards entry inside the existing Reward Center.
-Rewards are strictly locked until the daily quiz has closed and the 21:05 Dubai
+Rewards are strictly locked until the daily quiz has closed and the 21:05 IST
 final-result step has completed. Nothing is issued from simply opening the screen:
 the admin must explicitly tap Approve & Issue ₹1,000 after finalisation.
 """
@@ -31,7 +31,7 @@ def _period_key(campaign):
 def _finalization_state(campaign):
     """Return whether rewards are allowed to be approved for this campaign.
 
-    Hard gate 1: current time must be at/after today's 21:05 Dubai result time.
+    Hard gate 1: current time must be at/after today's 21:05 IST result time.
     Hard gate 2: when public result announcements are enabled, the final result
     must actually have been marked delivered before approval is exposed.
     """
@@ -40,7 +40,7 @@ def _finalization_state(campaign):
     time_ready = now_utc >= result_utc
     announced = schedule._result_already_sent(campaign["id"])
     if not time_ready:
-        return False, "Results are provisional until 21:05 Dubai time."
+        return False, "Results are provisional until 21:05 IST."
     if schedule.RESULT_CHANNEL_ENABLED and not announced:
         return False, "Waiting for the public final-result announcement to complete."
     return True, "Final results announced. Rewards may now be approved."
@@ -130,7 +130,7 @@ def _screen_text(campaign, rows):
     else:
         lines += [
             "The leaderboard shown here is provisional. Rankings can still change before close.",
-            "The approval button will appear only after the 21:05 Dubai final result is announced.",
+            "The approval button will appear only after the 21:05 IST final result is announced.",
         ]
     return "\n".join(lines)
 
@@ -258,6 +258,6 @@ def install():
     bot.callback_handler = daily_quiz_reward_callback
     bot.logger.warning(
         "DAILY_QUIZ_ADMIN_REWARDS active=on admin_only=on manual_approval=on pool=1000 "
-        "approval_gate=21:05_Dubai+final_result_announced"
+        "approval_gate=21:05_IST+final_result_announced"
     )
     return daily_quiz_reward_callback
