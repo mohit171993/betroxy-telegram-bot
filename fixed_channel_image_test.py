@@ -33,6 +33,17 @@ def install():
         bot.logger.exception("BANNER_MANAGER_INSTALL_FAILED")
         raise
 
+    # Phase-1 bulk channel banner uploader. The admin can send 7-8 photos in one
+    # Telegram album/session; they are auto-segregated 2/2/2/1-2 across the four
+    # quiz slots, reviewed once and approved together. Existing locked creatives
+    # remain fallbacks and channel rotation stays round-robin by IST day.
+    try:
+        import banner_bulk_upload
+        banner_bulk_upload.install()
+    except Exception:
+        bot.logger.exception("BANNER_BULK_UPLOAD_INSTALL_FAILED")
+        raise
+
     # Install the Business enquiry follow-up policy after all legacy engagement
     # modules have loaded so V83's worker resolves the patched selector at runtime.
     try:
@@ -54,6 +65,6 @@ def install():
 
     bot.logger.warning(
         "FIXED_CHANNEL_IMAGE_TEST deprecated=on active=off replacement=channel_media_manager_admin_upload "
-        "welcome_v2=on banner_manager=on channel_rotation=round_robin_daily_IST"
+        "welcome_v2=on banner_manager=on banner_bulk_upload=on channel_rotation=round_robin_daily_IST"
     )
     return bot.callback_handler
