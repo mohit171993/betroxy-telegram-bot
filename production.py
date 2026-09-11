@@ -110,7 +110,7 @@ def _install_text_only_leaderboard():
     bot.callback_handler = _production_callback_handler
 
 
-def _feature_guard(compact_menu, quiz_alerts, business_menu=None):
+def _feature_guard(compact_menu, quiz_alerts, business_menu=None, dm_reply_handler=None):
     menu = compact_menu.compact_public_menu(None)
     menu_buttons = [b for row in menu.inline_keyboard for b in row]
     quiz_buttons = [b for b in menu_buttons if "daily quiz" in str(getattr(b, "text", "")).lower()]
@@ -130,6 +130,9 @@ def _feature_guard(compact_menu, quiz_alerts, business_menu=None):
         business_labels = [str(getattr(b, "text", "")) for row in business_menu(True).inline_keyboard for b in row]
         public_labels = [str(getattr(b, "text", "")) for b in menu_buttons]
         business_menu_ok = business_labels == public_labels
+    dm_reply_ok = True
+    if dm_reply_handler:
+        dm_reply_ok = getattr(v85.v49, "_business_message_update", None) is dm_reply_handler
     required = {
         "quiz_text": callable(getattr(v110, "_send_question_to_user", None)),
         "daily_quiz_route": quiz_route_ok,
@@ -143,6 +146,7 @@ def _feature_guard(compact_menu, quiz_alerts, business_menu=None):
         "quiz_alerts": callable(getattr(quiz_alerts, "alert_worker", None)),
         "compact_menu": callable(getattr(compact_menu, "compact_public_menu", None)),
         "business_menu_matches_start": business_menu_ok,
+        "business_dm_reply": dm_reply_ok,
     }
     missing = [name for name, ok in required.items() if not ok]
     state = " ".join(f"{name}={'ON' if ok else 'OFF'}" for name, ok in required.items())
@@ -167,7 +171,12 @@ def main():
     unified_menu = importlib.import_module("unified_customer_menu")
     business_menu = unified_menu.install(compact_menu, v83.v75)
 
-    _feature_guard(compact_menu, quiz_alerts, business_menu)
+    # Returning Business customers must also get a reply to /start/hello; V85 used
+    # to silently store those after the first auto acknowledgement.
+    dm_reply_fix = importlib.import_module("business_dm_reply_fix")
+    dm_reply_handler = dm_reply_fix.install()
+
+    _feature_guard(compact_menu, quiz_alerts, business_menu, dm_reply_handler)
     v97._startup_diagnostic()
     v96._startup_diagnostic()
     v93._startup_pdf_diagnostic()
@@ -181,8 +190,8 @@ def main():
     bot.logger.warning(
         "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off leaderboard_image=off "
         "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
-        "quiz_alerts=10:00/19:00_Dubai customer_menu=start_and_business_same6 legacy_image_quiz=off test_probe=off public_image_worker=off "
-        "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
+        "quiz_alerts=10:00/19:00_Dubai customer_menu=start_and_business_same6 business_greeting_reply=on "
+        "legacy_image_quiz=off test_probe=off public_image_worker=off daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
         daily_schedule.SCHEDULE_ENABLED, daily_schedule.AUTO_REWARDS_ENABLED, daily_schedule.RESULT_CHANNEL_ENABLED,
     )
     time.sleep(12)
