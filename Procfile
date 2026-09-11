@@ -1,1 +1,1 @@
-worker: python v104_mobile_capture_fix.py
+worker: python v105_indian_mobile_rewards.py
