@@ -16,8 +16,6 @@ v83 = v110.v83
 
 INDIA_OFFSET_HOURS = 5.5
 
-# Re-base the active quiz schedule and engagement quiet/send-hour calculations
-# onto India Standard Time. The schedule module reads its offset dynamically.
 schedule.DUBAI_OFFSET = INDIA_OFFSET_HOURS
 v110.TZ_OFFSET = INDIA_OFFSET_HOURS
 v83.TZ_OFFSET = INDIA_OFFSET_HOURS
@@ -163,8 +161,7 @@ def alert_worker():
         time.sleep(30)
 
 
-# Fixed-image test rollout: the old runtime renderer is intentionally bypassed.
-# Only the 10:00 AM fixed repository image is previewed to the admin for approval.
-# Channel permission/connection is deferred until that test is approved.
-import channel_media_static as channel_media_manager
+# Keep the stable production media manager active while the fixed-image test is
+# prepared separately. No additional channel permission is granted here.
+import channel_media_manager as channel_media_manager
 channel_media_manager.install(v110, schedule)
