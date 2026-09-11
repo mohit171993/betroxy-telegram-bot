@@ -187,6 +187,12 @@ def main():
     admin_rewards = importlib.import_module("daily_quiz_admin_rewards")
     admin_rewards_handler = admin_rewards.install()
 
+    # GiftPort GPAPGV mapping: card_no is the customer-facing redeem code while
+    # redeem_code is a provider/reference number. Patch both My Rewards and future
+    # delivery messages so the reference is never mislabeled as a redeem code.
+    reward_display_fix = importlib.import_module("reward_code_display_fix")
+    reward_display_fix.install(v97, v97.v89, v83)
+
     _feature_guard(compact_menu, quiz_alerts, business_menu, dm_reply_handler, admin_rewards_handler)
     v97._startup_diagnostic()
     v96._startup_diagnostic()
@@ -202,7 +208,7 @@ def main():
         "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off leaderboard_image=off "
         "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
         "quiz_alerts=10:00/19:00_Dubai customer_menu=start_and_business_same6 business_greeting_reply=on "
-        "daily_quiz_admin_rewards=on legacy_image_quiz=off test_probe=off public_image_worker=off "
+        "daily_quiz_admin_rewards=on reward_code_display_fix=on legacy_image_quiz=off test_probe=off public_image_worker=off "
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
         daily_schedule.SCHEDULE_ENABLED, daily_schedule.AUTO_REWARDS_ENABLED, daily_schedule.RESULT_CHANNEL_ENABLED,
     )
