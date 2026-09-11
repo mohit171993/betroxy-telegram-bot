@@ -1,4 +1,4 @@
-"""Production hotfix: explicit Business DM greetings must always receive a bot menu reply."""
+"""Production hotfix: Telegram Business enquiries receive a reliable first reply."""
 import time
 
 import bot
@@ -50,7 +50,10 @@ async def business_message_update_with_menu_reply(update, context):
     if getattr(message, "sender_business_bot", None):
         raise ApplicationHandlerStop
 
+    # Read the existing state before upsert so we can reliably identify the
+    # customer's first genuine inbound enquiry.
     previous = v85._existing_enquiry(connection_id, message.chat_id)
+    is_new_enquiry = previous is None
     was_resolved = bool(previous and previous.get("status") == "resolved")
     inbound_preview = v49._message_preview(message)
     message_type = v49._message_type(message)
@@ -70,22 +73,29 @@ async def business_message_update_with_menu_reply(update, context):
     settings = v49._business_settings()
     explicit_menu = _explicit_menu_request(message_text)
 
-    # The old V85 flow suppresses greetings after auto_ack_sent_at is set. That
-    # made /start and hello appear dead for returning customers. Explicit menu
-    # requests now bypass that historical-state suppression, with a short local
-    # cooldown to avoid accidental duplicate replies.
+    # First genuine inbound enquiry ALWAYS receives the useful BETROXY welcome
+    # response, regardless of the legacy Auto Reply toggle. This prevents new
+    # leads such as "Hi, I found Betroxy online..." from appearing unanswered.
+    # For returning customers, preserve the existing toggle, intent throttling
+    # and explicit-menu cooldown so repeat messages are not spammed.
     should_attempt = False
-    if settings.get("auto_ack_enabled"):
-        if explicit_menu and _greeting_cooldown_ok(message.chat_id):
-            should_attempt = True
-        elif biz51._auto_reply_allowed(enquiry):
-            should_attempt = (not enquiry.get("auto_ack_sent_at")) or intent not in {"general", "greeting"}
+    if is_new_enquiry:
+        should_attempt = True
+    elif explicit_menu and _greeting_cooldown_ok(message.chat_id):
+        should_attempt = True
+    elif settings.get("auto_ack_enabled") and biz51._auto_reply_allowed(enquiry):
+        should_attempt = (not enquiry.get("auto_ack_sent_at")) or intent not in {"general", "greeting"}
 
     if should_attempt:
         try:
             enquiry = await biz51._send_smart_reply(context, enquiry, intent)
             auto_replied = True
-            if explicit_menu:
+            if is_new_enquiry:
+                bot.logger.warning(
+                    "BUSINESS_DM_FIRST_REPLY sent=on chat_id=%s intent=%s text=%s",
+                    message.chat_id, intent, v85._clean_text(message_text)[:80],
+                )
+            elif explicit_menu:
                 bot.logger.warning(
                     "BUSINESS_DM_MENU_REPLY sent=on chat_id=%s intent=%s text=%s",
                     message.chat_id, intent, v85._clean_text(message_text)[:40],
@@ -136,6 +146,6 @@ async def business_message_update_with_menu_reply(update, context):
 def install():
     v49._business_message_update = business_message_update_with_menu_reply
     bot.logger.warning(
-        "BUSINESS_DM_REPLY_FIX active=on explicit_start=reply explicit_greeting=reply cooldown=20s"
+        "BUSINESS_DM_REPLY_FIX active=on first_enquiry=always_reply explicit_start=reply explicit_greeting=reply cooldown=20s"
     )
     return business_message_update_with_menu_reply
