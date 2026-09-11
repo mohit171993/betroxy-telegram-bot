@@ -1,8 +1,5 @@
 """Staged daily quiz schedule for BETROXY.
 
-NOT LIVE by default. This module is developed on a feature branch and all workers
-remain gated by QUIZ_SCHEDULE_ENABLED=1.
-
 Policy:
 - one daily attempt per Telegram user (existing DB unique constraint)
 - participation any time until 21:00 Asia/Dubai
@@ -11,6 +8,7 @@ Policy:
 - live leaderboard is provisional
 - final results at 21:05 Asia/Dubai
 - winners: #1 ₹500, #2 ₹300, #3 ₹200
+- configured test accounts can participate but are excluded from prize ranking
 - GiftPort operator GPAPGV, auto reward issuance separately gated
 """
 import html
@@ -37,6 +35,20 @@ AUTO_REWARDS_ENABLED = os.getenv("QUIZ_AUTO_REWARDS_ENABLED", "0").strip().lower
 RESULT_CHANNEL_ENABLED = os.getenv("QUIZ_RESULT_CHANNEL_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 REWARD_OPERATOR = os.getenv("QUIZ_REWARD_OPERATOR", "GPAPGV").strip() or "GPAPGV"
 
+# Test/admin accounts may still play and appear on the provisional leaderboard,
+# but they never consume a paid prize position in the final ranking.
+_raw_excluded_usernames = os.getenv("QUIZ_PRIZE_EXCLUDED_USERNAMES", "mohit_97saxena")
+PRIZE_EXCLUDED_USERNAMES = {
+    x.strip().lstrip("@").lower()
+    for x in _raw_excluded_usernames.split(",")
+    if x.strip()
+}
+_raw_excluded_ids = os.getenv("QUIZ_PRIZE_EXCLUDED_USER_IDS", "")
+PRIZE_EXCLUDED_USER_IDS = {
+    int(x.strip()) for x in _raw_excluded_ids.split(",")
+    if x.strip().isdigit()
+}
+
 # Make all answer validation use 30 seconds.
 v110.QUESTION_SECONDS = QUESTION_SECONDS
 quiz.v110.QUESTION_SECONDS = QUESTION_SECONDS
@@ -51,7 +63,6 @@ def _day_bounds(local_date=None):
     d = local_date or now.date()
     close_local = datetime(d.year, d.month, d.day, CLOSE_HOUR, 0, 0, tzinfo=timezone.utc)
     result_local = datetime(d.year, d.month, d.day, CLOSE_HOUR, RESULT_MINUTE, 0, tzinfo=timezone.utc)
-    # Values above are Dubai wall clock represented with UTC tzinfo; subtract offset for actual UTC.
     return close_local - timedelta(hours=DUBAI_OFFSET), result_local - timedelta(hours=DUBAI_OFFSET)
 
 
@@ -82,7 +93,6 @@ def _edit_question(uid, message_id, question, seq, remaining):
 
 
 def _countdown_worker(uid, message_id, question, seq):
-    # Update only a few times to avoid Telegram rate-limit noise.
     started = time.monotonic()
     for elapsed, remaining in ((10, 20), (20, 10), (25, 5)):
         delay = elapsed - (time.monotonic() - started)
@@ -123,10 +133,8 @@ async def _send_question_30s(uid, campaign, entry, question):
     return ok
 
 
-# Patch active text quiz sender.
 quiz._send_question_text = _send_question_30s
 v110._send_question_to_user = _send_question_30s
-
 
 _original_today_campaign = v110._today_campaign
 
@@ -161,8 +169,39 @@ def _send_text(chat_id, text, rows=None):
     return bool(r.ok and data.get("ok")), data
 
 
+def _prize_eligible(row):
+    try:
+        uid = int(row.get("telegram_user_id") or 0)
+    except Exception:
+        uid = 0
+    username = str(row.get("telegram_username") or "").strip().lstrip("@").lower()
+    if uid and uid in PRIZE_EXCLUDED_USER_IDS:
+        return False
+    if username and username in PRIZE_EXCLUDED_USERNAMES:
+        return False
+    return True
+
+
 def _final_rows(campaign_id):
-    return v110._leaderboard(campaign_id, limit=3)
+    # Pull extra rows so excluded test/admin accounts do not reduce the number
+    # of actual prize winners. Provisional/live leaderboard behavior is unchanged.
+    ranked = v110._leaderboard(campaign_id, limit=100)
+    eligible = []
+    excluded = []
+    for row in ranked:
+        if _prize_eligible(row):
+            eligible.append(row)
+            if len(eligible) >= 3:
+                break
+        else:
+            excluded.append(row)
+    if excluded:
+        bot.logger.warning(
+            "QUIZ_PRIZE_EXCLUSIONS campaign=%s excluded=%s",
+            campaign_id,
+            [(r.get("telegram_user_id"), r.get("telegram_username")) for r in excluded],
+        )
+    return eligible
 
 
 def _result_key(campaign):
@@ -178,12 +217,12 @@ def _winner_text(rows):
     prizes = [500, 300, 200]
     lines = ["🏆 <b>BETROXY DAILY CHALLENGE — FINAL RESULTS</b>", ""]
     if not rows:
-        lines.append("No completed entries today.")
+        lines.append("No eligible completed entries today.")
     else:
         for i, row in enumerate(rows[:3]):
             name = row.get("telegram_username") or f"Player {str(row.get('telegram_user_id'))[-4:]}"
             lines.append(f"{medals[i]} <b>{html.escape(str(name))}</b> — {int(row.get('correct_count') or 0)}/7 — ₹{prizes[i]}")
-    lines += ["", "Final ranking: accuracy → hard-question accuracy → total answer time."]
+    lines += ["", "Final prize ranking: accuracy → hard-question accuracy → total answer time."]
     return "\n".join(lines)
 
 
@@ -247,8 +286,9 @@ def _announce_if_due():
 
 def schedule_worker():
     bot.logger.warning(
-        "QUIZ_SCHEDULE_WORKER start enabled=%s close=21:00 result=21:05 tz=Asia/Dubai question_seconds=30 result_channel=%s auto_rewards=%s",
+        "QUIZ_SCHEDULE_WORKER start enabled=%s close=21:00 result=21:05 tz=Asia/Dubai question_seconds=30 result_channel=%s auto_rewards=%s exclusions=%s",
         SCHEDULE_ENABLED, RESULT_CHANNEL_ENABLED, AUTO_REWARDS_ENABLED,
+        sorted(PRIZE_EXCLUDED_USERNAMES),
     )
     while True:
         try:
@@ -261,6 +301,6 @@ def schedule_worker():
 
 
 bot.logger.warning(
-    "QUIZ_SCHEDULE_STAGED live=%s all_day_until=21:00 result=21:05 question_seconds=30 countdown=20/10/5 operator=%s",
-    SCHEDULE_ENABLED, REWARD_OPERATOR,
+    "QUIZ_SCHEDULE_STAGED live=%s all_day_until=21:00 result=21:05 question_seconds=30 countdown=20/10/5 operator=%s prize_exclusions=%s",
+    SCHEDULE_ENABLED, REWARD_OPERATOR, sorted(PRIZE_EXCLUDED_USERNAMES),
 )
