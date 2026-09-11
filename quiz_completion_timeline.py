@@ -8,6 +8,7 @@ from datetime import timedelta
 import bot
 import daily_quiz_experience_v2 as experience
 import quiz_winner_announcement
+import engagement_strategy_v2
 
 _installed = False
 
@@ -51,7 +52,12 @@ def install(production_globals):
         raise RuntimeError("Daily quiz schedule is unavailable")
     quiz_winner_announcement.install(schedule)
 
+    v83 = production_globals.get("v83")
+    if v83 is None:
+        raise RuntimeError("Engagement engine is unavailable")
+    engagement_strategy_v2.install(v83, schedule)
+
     _installed = True
     bot.logger.warning(
-        "QUIZ_COMPLETION_TIMELINE active=on leaderboard_lock=21:00_IST final_result=21:05_IST next_quiz=10:00_IST winner_announcement=on"
+        "QUIZ_COMPLETION_TIMELINE active=on leaderboard_lock=21:00_IST final_result=21:05_IST next_quiz=10:00_IST winner_announcement=on engagement_strategy=v2"
     )
