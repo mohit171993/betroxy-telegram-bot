@@ -217,12 +217,25 @@ def _winner_text(rows):
     prizes = [500, 300, 200]
     lines = ["🏆 <b>BETROXY DAILY CHALLENGE — FINAL RESULTS</b>", ""]
     if not rows:
-        lines.append("No eligible completed entries today.")
+        lines += [
+            "🏁 <b>TODAY'S CHALLENGE IS NOW CLOSED</b>",
+            "",
+            "No eligible finishers qualified for today's Top 3.",
+            "",
+            "🔥 <b>Tomorrow's leaderboard starts fresh at 10:00 AM IST.</b>",
+            "Be among the first players to set the score to beat.",
+            "",
+            "🎁 <b>₹1,000 DAILY PRIZE POOL</b>",
+            "🥇 1st — ₹500   •   🥈 2nd — ₹300   •   🥉 3rd — ₹200",
+            "",
+            "7 questions • 30 seconds each • one attempt",
+            "💯 Free to participate — no deposit or wager required.",
+        ]
     else:
         for i, row in enumerate(rows[:3]):
             name = row.get("telegram_username") or f"Player {str(row.get('telegram_user_id'))[-4:]}"
             lines.append(f"{medals[i]} <b>{html.escape(str(name))}</b> — {int(row.get('correct_count') or 0)}/7 — ₹{prizes[i]}")
-    lines += ["", "Final prize ranking: accuracy → hard-question accuracy → total answer time."]
+        lines += ["", "Final prize ranking: accuracy → hard-question accuracy → total answer time."]
     return "\n".join(lines)
 
 
