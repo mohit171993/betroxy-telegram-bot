@@ -167,7 +167,7 @@ def _direct_business_send(enquiry):
     r = requests.post(url, data=payload, timeout=20)
     data = r.json() if r.content else {}
     if not (r.ok and data.get("ok")):
-        # Inline markup can be rejected in some Business combinations. Retry
+        # Some Business chat/client combinations may reject inline markup. Retry
         # plain text with official links rather than leave the customer unanswered.
         fallback = (
             html.unescape(text.replace("<b>", "").replace("</b>", ""))
@@ -189,44 +189,94 @@ def _direct_business_send(enquiry):
     return result.get("message_id")
 
 
-def _backfill_recent_unanswered_customer():
-    """One-time recovery for the specific recent lead shown by the admin."""
+def _ensure_recovery_table():
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS business_recovery_jobs (
+                    recovery_key TEXT PRIMARY KEY,
+                    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    enquiry_id BIGINT,
+                    telegram_message_id BIGINT
+                )
+                """
+            )
+        conn.commit()
+
+
+def _recovery_already_done(recovery_key):
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM business_recovery_jobs WHERE recovery_key=%s LIMIT 1",
+                (recovery_key,),
+            )
+            return bool(cur.fetchone())
+
+
+def _mark_recovery_done(recovery_key, enquiry_id, telegram_message_id):
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO business_recovery_jobs (
+                    recovery_key, enquiry_id, telegram_message_id, completed_at
+                ) VALUES (%s,%s,%s,NOW())
+                ON CONFLICT (recovery_key) DO NOTHING
+                """,
+                (recovery_key, int(enquiry_id), int(telegram_message_id) if telegram_message_id else None),
+            )
+        conn.commit()
+
+
+def _backfill_recent_customer():
+    """One-time recovery for Mr Rohuu's recent 'found Betroxy online' lead."""
     time.sleep(8)
+    recovery_key = "20260911_mr_rohuu_found_betroxy_force_reply_v2"
     try:
+        _ensure_recovery_table()
+        if _recovery_already_done(recovery_key):
+            bot.logger.warning("BUSINESS_DM_BACKFILL_V2 already_done key=%s", recovery_key)
+            return
+
         with bot.get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT *
                     FROM telegram_business_enquiries
-                    WHERE auto_ack_sent_at IS NULL
-                      AND last_message_at >= NOW() - INTERVAL '24 hours'
+                    WHERE last_message_at >= NOW() - INTERVAL '48 hours'
                       AND LOWER(COALESCE(last_message_text,'')) LIKE '%%found betroxy online%%'
+                      AND LOWER(COALESCE(customer_first_name,'')) LIKE 'mr rohu%%'
                     ORDER BY last_message_at DESC
                     LIMIT 1
                     """
                 )
                 enquiry = cur.fetchone()
+
         if not enquiry:
-            bot.logger.warning("BUSINESS_DM_BACKFILL no_matching_unanswered_enquiry")
+            bot.logger.warning("BUSINESS_DM_BACKFILL_V2 no_matching_mr_rohuu_enquiry")
             return
+
         message_id = _direct_business_send(enquiry)
+        _mark_recovery_done(recovery_key, enquiry["id"], message_id)
         bot.logger.warning(
-            "BUSINESS_DM_BACKFILL sent=on enquiry_id=%s chat_id=%s message_id=%s",
+            "BUSINESS_DM_BACKFILL_V2 sent=on enquiry_id=%s chat_id=%s message_id=%s stale_ack_ignored=on",
             enquiry["id"], enquiry["customer_chat_id"], message_id,
         )
     except Exception:
-        bot.logger.exception("BUSINESS_DM_BACKFILL_FAILED")
+        bot.logger.exception("BUSINESS_DM_BACKFILL_V2_FAILED")
 
 
 def install():
     v49._business_message_update = business_message_update_with_menu_reply
     threading.Thread(
-        target=_backfill_recent_unanswered_customer,
-        name="betroxy-business-dm-backfill",
+        target=_backfill_recent_customer,
+        name="betroxy-business-dm-backfill-v2",
         daemon=True,
     ).start()
     bot.logger.warning(
-        "BUSINESS_DM_REPLY_FIX active=on first_enquiry=always_reply explicit_start=reply explicit_greeting=reply cooldown=20s backfill=recent_matching_unanswered"
+        "BUSINESS_DM_REPLY_FIX active=on first_enquiry=always_reply explicit_start=reply explicit_greeting=reply cooldown=20s backfill=v2_exact_recent_customer"
     )
     return business_message_update_with_menu_reply
