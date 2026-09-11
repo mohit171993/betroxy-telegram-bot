@@ -20,7 +20,26 @@ v85 = v110.v85
 v83 = v110.v83
 
 
+def _result_rows(campaign):
+    return [
+        [{"text": "🏆 LIVE LEADERBOARD", "callback_data": f"v110_leaderboard:{campaign['id']}"}],
+        [{"text": "🚀 EXPLORE BETROXY", "url": v110.OPEN_APP_URL}],
+    ]
+
+
+def _result_text(entry, rank, already=False):
+    heading = "✅ <b>Today's challenge is already complete.</b>" if already else "🎉 <b>Challenge complete!</b>"
+    return (
+        f"{heading}\n\n"
+        f"Score: <b>{int(entry.get('correct_count') or 0)}/7</b>\n"
+        f"Rank: <b>#{rank}</b>\n\n"
+        "Daily ranking: correct answers → hard-question accuracy → total answer time."
+    )
+
+
 def _install_text_only_quiz_results():
+    original_start_quiz = v110._start_quiz
+
     async def _finish_quiz_text(uid, campaign, entry):
         with bot.get_db() as conn:
             with conn.cursor() as cur:
@@ -31,24 +50,21 @@ def _install_text_only_quiz_results():
                 final = cur.fetchone()
             conn.commit()
         rank = v110._rank(campaign["id"], final["id"])
-        rows = [
-            [{"text": "🏆 LIVE LEADERBOARD", "callback_data": f"v110_leaderboard:{campaign['id']}"}],
-            [{"text": "🚀 EXPLORE BETROXY", "url": v110.OPEN_APP_URL}],
-        ]
-        text = (
-            f"🎉 <b>Challenge complete!</b>\n\n"
-            f"Score: <b>{final['correct_count']}/7</b>\n"
-            f"Rank: <b>#{rank}</b>\n\n"
-            "Daily ranking: correct answers → hard-question accuracy → total answer time."
-        )
-        ok, data = quiz._tg_send_text(uid, text, rows)
+        ok, _ = quiz._tg_send_text(uid, _result_text(final, rank), _result_rows(campaign))
         v110._set_session(uid, flow_state="complete", current_question_id=None, question_sent_at=None)
-        bot.logger.warning(
-            "QUIZ_TEXT_RESULT uid=%s campaign=%s entry=%s correct=%s hard=%s ms=%s rank=%s sent=%s image=off",
-            uid, campaign["id"], final["id"], final["correct_count"], final["hard_correct"], final["total_answer_ms"], rank, ok,
-        )
+        bot.logger.warning("QUIZ_TEXT_RESULT uid=%s campaign=%s rank=%s sent=%s image=off", uid, campaign["id"], rank, ok)
+
+    async def _start_quiz_text(uid, username, campaign, source="officialbot"):
+        entry = v110._entry(campaign["id"], uid, username, source)
+        if entry.get("completed_at"):
+            rank = v110._rank(campaign["id"], entry["id"])
+            ok, _ = quiz._tg_send_text(uid, _result_text(entry, rank, already=True), _result_rows(campaign))
+            bot.logger.warning("QUIZ_TEXT_RESULT_REPLAY uid=%s campaign=%s rank=%s sent=%s image=off", uid, campaign["id"], rank, ok)
+            return
+        return await original_start_quiz(uid, username, campaign, source)
 
     v110._finish_quiz = _finish_quiz_text
+    v110._start_quiz = _start_quiz_text
 
 
 def _feature_guard(compact_menu, quiz_alerts):
@@ -61,8 +77,10 @@ def _feature_guard(compact_menu, quiz_alerts):
         and getattr(v110, "_send_question_to_user", None) is getattr(daily_schedule, "_send_question_30s", None)
     )
     reminder_patch_ok = getattr(v83, "_worker_cycle", None) is getattr(reminder, "_v87_worker_cycle", None)
-    result_text_only_ok = getattr(v110._finish_quiz, "__name__", "") == "_finish_quiz_text"
-
+    result_text_only_ok = (
+        getattr(v110._finish_quiz, "__name__", "") == "_finish_quiz_text"
+        and getattr(v110._start_quiz, "__name__", "") == "_start_quiz_text"
+    )
     required = {
         "quiz_text": callable(getattr(v110, "_send_question_to_user", None)),
         "daily_quiz_route": quiz_route_ok,
@@ -85,17 +103,12 @@ def _feature_guard(compact_menu, quiz_alerts):
 def main():
     v110._ensure_schema()
     v111._compatibility_selftest()
-
     compact_menu = importlib.import_module("clean_customer_menu")
     quiz_alerts = importlib.import_module("daily_quiz_alerts")
-
-    # Re-assert approved runtime patches after all optional imports.
     reminder.v83._worker_cycle = reminder._v87_worker_cycle
     v83._worker_cycle = reminder._v87_worker_cycle
     _install_text_only_quiz_results()
-
     _feature_guard(compact_menu, quiz_alerts)
-
     v97._startup_diagnostic()
     v96._startup_diagnostic()
     v93._startup_pdf_diagnostic()
@@ -103,19 +116,15 @@ def main():
     v104._startup_mobile_diagnostic()
     v88.v63.apply_signup_cta()
     v85._enable_smart_reply_without_reset()
-
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
-
     bot.logger.warning(
-        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off daily_quiz_route=compact_daily_quiz "
-        "timer=30s countdown=20/10/5 reminders=on optin_reminder=3d quiz_alerts=10:00/19:00_Dubai "
-        "legacy_image_quiz=off test_probe=off public_image_worker=off daily_schedule_enabled=%s "
-        "auto_rewards=%s result_channel=%s",
-        daily_schedule.SCHEDULE_ENABLED,
-        daily_schedule.AUTO_REWARDS_ENABLED,
-        daily_schedule.RESULT_CHANNEL_ENABLED,
+        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off "
+        "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
+        "quiz_alerts=10:00/19:00_Dubai legacy_image_quiz=off test_probe=off public_image_worker=off "
+        "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
+        daily_schedule.SCHEDULE_ENABLED, daily_schedule.AUTO_REWARDS_ENABLED, daily_schedule.RESULT_CHANNEL_ENABLED,
     )
     time.sleep(12)
     bot.main()
