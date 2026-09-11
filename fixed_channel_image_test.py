@@ -10,13 +10,17 @@ quiz/media routing.
 import bot
 
 
+def _menu_labels(markup):
+    return [str(getattr(button, "text", "")) for row in markup.inline_keyboard for button in row]
+
+
 def install():
     # Apply the final customer-facing welcome presentation only after the main
     # production feature guard has validated the stable underlying routes.
     try:
         import clean_customer_menu
         import welcome_experience_v2
-        welcome_experience_v2.install(clean_customer_menu, clean_customer_menu.v83.v75)
+        final_business_menu = welcome_experience_v2.install(clean_customer_menu, clean_customer_menu.v83.v75)
     except Exception:
         bot.logger.exception("WELCOME_EXPERIENCE_V2_INSTALL_FAILED")
         raise
@@ -75,9 +79,35 @@ def install():
         bot.logger.exception("CHANNEL_CONNECTION_TEST_INSTALL_FAILED")
         raise
 
+    # Final late-bootstrap guard. This deliberately runs AFTER every customer,
+    # banner and Business patch above. A future legacy module cannot silently
+    # leave OfficialBot and Telegram Business with different visible menus.
+    try:
+        public_labels = _menu_labels(bot.public_menu(None))
+        business_labels = _menu_labels(final_business_menu(True))
+        expected = [
+            "🚀 Open BETROXY",
+            "🏆 Daily Quiz",
+            "🎁 My Rewards",
+            "👤 My Account",
+            "📢 Updates & Promotions",
+            "🎧 Help & Support",
+        ]
+        if public_labels != expected or business_labels != expected:
+            raise RuntimeError(
+                f"Final customer menu mismatch public={public_labels} business={business_labels} expected={expected}"
+            )
+        bot.logger.warning(
+            "FINAL_CUSTOMER_MENU_GUARD ok=True bot=6 business=6 labels_match=on betroxy_first=on"
+        )
+    except Exception:
+        bot.logger.exception("FINAL_CUSTOMER_MENU_GUARD_FAILED")
+        raise
+
     bot.logger.warning(
         "FIXED_CHANNEL_IMAGE_TEST deprecated=on active=off replacement=channel_media_manager_admin_upload "
-        "welcome_v2=on banner_manager=on banner_bulk_upload=on banner_bulk_documents=on "
-        "business_new_lead_popup=off business_attention_alerts=on channel_rotation=round_robin_daily_IST"
+        "welcome_v2=on authoritative_customer_menu=on banner_manager=on banner_bulk_upload=on "
+        "banner_bulk_documents=on business_new_lead_popup=off business_attention_alerts=on "
+        "channel_rotation=round_robin_daily_IST"
     )
     return bot.callback_handler
