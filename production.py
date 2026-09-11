@@ -9,6 +9,7 @@ import time
 import bot
 import v113_text_quiz_ux as quiz
 import v87_single_optin_reminder as reminder
+import daily_quiz_schedule as daily_schedule
 
 v110 = quiz.v110
 v111 = quiz.v111
@@ -30,6 +31,7 @@ REQUIRED_FEATURES = {
     "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)),
     "rewards": callable(getattr(v97, "_issue_award", None)),
     "engagement": callable(getattr(v83, "_worker_loop", None)),
+    "daily_schedule": callable(getattr(daily_schedule, "schedule_worker", None)),
 }
 
 
@@ -59,9 +61,15 @@ def main():
     # one-time opt-in reminder. No V110 public/image worker or test probe runs.
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
 
+    # This worker is safe to include because it is hard-gated by
+    # QUIZ_SCHEDULE_ENABLED=1. Default is OFF until explicitly approved live.
+    threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
+
     bot.logger.warning(
         "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on reminders=on "
-        "legacy_image_quiz=off test_probe=off public_image_worker=off"
+        "legacy_image_quiz=off test_probe=off public_image_worker=off "
+        "daily_schedule_enabled=%s",
+        daily_schedule.SCHEDULE_ENABLED,
     )
     time.sleep(12)
     bot.main()
