@@ -1,11 +1,12 @@
 import re
 import threading
 import time
+from datetime import datetime, timezone
 
 import bot
 import v104_mobile_capture_fix as v104
 
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.ext import Application, ApplicationHandlerStop, MessageHandler, filters
 
 v103 = v104.v103
@@ -24,6 +25,7 @@ v83 = v104.v83
 
 _old_add_handler = Application.add_handler
 _old_callback_handler = bot.callback_handler
+_old_chat_handler = bot.chat_handler
 _old_save_mobile = v89._save_mobile
 _installed_apps = set()
 
@@ -41,7 +43,7 @@ def _save_indian_mobile(uid, raw, source="officialbot_indian_mobile"):
     return _old_save_mobile(uid, value, source)
 
 
-# Make +91 India mobile mandatory everywhere the rewards layer saves a mobile.
+# India-only reward mobile rule.
 v89._save_mobile = _save_indian_mobile
 
 
@@ -65,59 +67,75 @@ async def _send_india_mobile_prompt(msg, uid):
     )
 
 
-async def _typed_indian_mobile_handler(update, context):
+def _mobile_flow_recent(uid):
+    row = v89._mobile_row(uid) or {}
+    prompted_at = row.get("mobile_prompted_at")
+    if prompted_at is None:
+        return False
+    try:
+        p = prompted_at if getattr(prompted_at, "tzinfo", None) else prompted_at.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - p).total_seconds() <= 1800
+    except Exception:
+        return False
+
+
+async def _save_typed_indian_mobile(update):
     user = update.effective_user
     msg = update.effective_message
-    chat = update.effective_chat
-    if not user or not msg or not chat or str(getattr(chat, "type", "")) != "private":
-        return
+    if not user or not msg:
+        return False
 
     text = str(getattr(msg, "text", "") or "").strip()
     compact = text.replace(" ", "").replace("-", "")
-
-    # Only intercept phone-looking text. Ordinary chat continues normally.
     phone_like = compact.startswith("+") or compact.isdigit()
-    if not phone_like:
-        return
-
-    # Only treat it as reward-mobile entry after the user has opened the mobile flow recently.
-    row = v89._mobile_row(user.id) or {}
-    prompted_at = row.get("mobile_prompted_at")
-    recent_prompt = False
-    if prompted_at is not None:
-        try:
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc)
-            p = prompted_at if getattr(prompted_at, "tzinfo", None) else prompted_at.replace(tzinfo=timezone.utc)
-            recent_prompt = (now - p).total_seconds() <= 1800
-        except Exception:
-            recent_prompt = True
-    if not recent_prompt:
-        return
+    if not phone_like or not _mobile_flow_recent(user.id):
+        return False
 
     if not _is_indian_mobile(compact):
         await msg.reply_text(
-            "❌ <b>Only an Indian mobile is accepted for rewards.</b>\n\n"
-            "Please enter it exactly as <code>+91XXXXXXXXXX</code> (10 digits after +91).",
+            "❌ <b>Only an Indian +91 mobile is accepted for rewards.</b>\n\n"
+            "Please enter it exactly as <code>+91XXXXXXXXXX</code> — 10 digits after +91.",
             parse_mode=bot.ParseMode.HTML,
             reply_markup=_mobile_entry_markup(),
         )
-        raise ApplicationHandlerStop
+        bot.logger.warning("V105_INDIA_MOBILE rejected uid=%s username=%s source=manual", user.id, user.username)
+        return True
 
     saved = _save_indian_mobile(user.id, compact, "officialbot_manual_india_v105")
     if not saved:
-        await msg.reply_text("❌ Could not save that number. Please enter a valid Indian mobile as +91XXXXXXXXXX.")
-        raise ApplicationHandlerStop
+        await msg.reply_text(
+            "❌ Could not save that number. Please enter a valid Indian mobile as +91XXXXXXXXXX.",
+            reply_markup=_mobile_entry_markup(),
+        )
+        return True
 
     digits = re.sub(r"\D+", "", str(saved.get("mobile_number") or ""))
     masked = "+91••••••" + digits[-4:]
     await msg.reply_text(
-        f"✅ <b>Indian mobile verified for rewards</b>\n\n{masked}\n\nYou can now run the PhonePe B2B ₹30 test from Reward Center.",
+        f"✅ <b>Indian mobile verified for rewards</b>\n\n{masked}\n\n"
+        "Your +91 number is saved. You can now continue with eligible INR rewards.",
         parse_mode=bot.ParseMode.HTML,
         reply_markup=ReplyKeyboardRemove(),
     )
-    bot.logger.warning("V105_INDIA_MOBILE saved uid=%s username=%s source=manual", user.id, user.username)
-    raise ApplicationHandlerStop
+    bot.logger.warning("V105_INDIA_MOBILE saved uid=%s username=%s source=manual_chat", user.id, user.username)
+    return True
+
+
+# Robust text route: bot.main installs bot.chat_handler for all ordinary text.
+# Intercept a recently prompted reward-mobile entry before the generic Welcome-back handler.
+async def v105_chat_handler(update, context):
+    user = update.effective_user
+    msg = update.effective_message
+    chat = update.effective_chat
+    if user and msg and chat and str(getattr(chat, "type", "")) == "private":
+        if await _save_typed_indian_mobile(update):
+            return
+    return await _old_chat_handler(update, context)
+
+
+async def _typed_indian_mobile_handler(update, context):
+    if await _save_typed_indian_mobile(update):
+        raise ApplicationHandlerStop
 
 
 async def _indian_contact_handler(update, context):
@@ -188,15 +206,30 @@ def _v105_add_handler(self, handler, group=0):
     return _old_add_handler(self, handler, group=group)
 
 
+def _startup_selftest():
+    valid = _is_indian_mobile("+919876543210")
+    reject_uae = not _is_indian_mobile("+971509430642")
+    reject_short = not _is_indian_mobile("+91987654")
+    wrapper = bot.chat_handler is v105_chat_handler
+    bot.logger.warning(
+        "V105_SELFTEST india_valid=%s non_india_rejected=%s short_rejected=%s chat_wrapper_installed=%s",
+        valid, reject_uae, reject_short, wrapper,
+    )
+    if not all([valid, reject_uae, reject_short, wrapper]):
+        raise RuntimeError("V105 Indian mobile routing self-test failed")
+
+
 Application.add_handler = _v105_add_handler
 bot.callback_handler = v105_callback_handler
+bot.chat_handler = v105_chat_handler
 v97._reward_center_keyboard = v102._v102_reward_center_keyboard
 v89._reward_center_keyboard = v102._v102_reward_center_keyboard
 
-bot.logger.warning("V105_INDIA_MOBILE_REWARDS active=on format=+91XXXXXXXXXX manual_entry=on contact_share_india_only=on")
+bot.logger.warning("V105_INDIA_MOBILE_REWARDS active=on format=+91XXXXXXXXXX manual_entry=on direct_chat_route=on contact_share_india_only=on")
 
 
 if __name__ == "__main__":
+    _startup_selftest()
     v97._startup_diagnostic()
     v96._startup_diagnostic()
     v93._startup_pdf_diagnostic()
