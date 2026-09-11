@@ -20,6 +20,37 @@ v85 = v110.v85
 v83 = v110.v83
 
 
+def _install_text_only_quiz_results():
+    async def _finish_quiz_text(uid, campaign, entry):
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE v110_quiz_entries SET completed_at=COALESCE(completed_at,NOW()) WHERE id=%s RETURNING *",
+                    (int(entry["id"]),),
+                )
+                final = cur.fetchone()
+            conn.commit()
+        rank = v110._rank(campaign["id"], final["id"])
+        rows = [
+            [{"text": "🏆 LIVE LEADERBOARD", "callback_data": f"v110_leaderboard:{campaign['id']}"}],
+            [{"text": "🚀 EXPLORE BETROXY", "url": v110.OPEN_APP_URL}],
+        ]
+        text = (
+            f"🎉 <b>Challenge complete!</b>\n\n"
+            f"Score: <b>{final['correct_count']}/7</b>\n"
+            f"Rank: <b>#{rank}</b>\n\n"
+            "Daily ranking: correct answers → hard-question accuracy → total answer time."
+        )
+        ok, data = quiz._tg_send_text(uid, text, rows)
+        v110._set_session(uid, flow_state="complete", current_question_id=None, question_sent_at=None)
+        bot.logger.warning(
+            "QUIZ_TEXT_RESULT uid=%s campaign=%s entry=%s correct=%s hard=%s ms=%s rank=%s sent=%s image=off",
+            uid, campaign["id"], final["id"], final["correct_count"], final["hard_correct"], final["total_answer_ms"], rank, ok,
+        )
+
+    v110._finish_quiz = _finish_quiz_text
+
+
 def _feature_guard(compact_menu, quiz_alerts):
     menu = compact_menu.compact_public_menu(None)
     menu_buttons = [b for row in menu.inline_keyboard for b in row]
@@ -30,11 +61,13 @@ def _feature_guard(compact_menu, quiz_alerts):
         and getattr(v110, "_send_question_to_user", None) is getattr(daily_schedule, "_send_question_30s", None)
     )
     reminder_patch_ok = getattr(v83, "_worker_cycle", None) is getattr(reminder, "_v87_worker_cycle", None)
+    result_text_only_ok = getattr(v110._finish_quiz, "__name__", "") == "_finish_quiz_text"
 
     required = {
         "quiz_text": callable(getattr(v110, "_send_question_to_user", None)),
         "daily_quiz_route": quiz_route_ok,
         "quiz_30s_timer": timer_route_ok,
+        "quiz_result_text_only": result_text_only_ok,
         "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)) and reminder_patch_ok,
         "rewards": callable(getattr(v97, "_issue_award", None)),
         "engagement": callable(getattr(v83, "_worker_loop", None)),
@@ -44,7 +77,7 @@ def _feature_guard(compact_menu, quiz_alerts):
     }
     missing = [name for name, ok in required.items() if not ok]
     state = " ".join(f"{name}={'ON' if ok else 'OFF'}" for name, ok in required.items())
-    bot.logger.warning("PRODUCTION_FEATURE_GUARD %s legacy_image_quiz=OFF test_probe=OFF", state)
+    bot.logger.warning("PRODUCTION_FEATURE_GUARD %s legacy_image_quiz=OFF result_image=OFF test_probe=OFF", state)
     if missing:
         raise RuntimeError("Required BETROXY features missing: " + ", ".join(missing))
 
@@ -56,10 +89,10 @@ def main():
     compact_menu = importlib.import_module("clean_customer_menu")
     quiz_alerts = importlib.import_module("daily_quiz_alerts")
 
-    # Re-assert the approved V87 reminder patch after all optional imports.
-    # Some older modules in the import chain can replace v83._worker_cycle.
+    # Re-assert approved runtime patches after all optional imports.
     reminder.v83._worker_cycle = reminder._v87_worker_cycle
     v83._worker_cycle = reminder._v87_worker_cycle
+    _install_text_only_quiz_results()
 
     _feature_guard(compact_menu, quiz_alerts)
 
@@ -76,7 +109,7 @@ def main():
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
 
     bot.logger.warning(
-        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on daily_quiz_route=compact_daily_quiz "
+        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off daily_quiz_route=compact_daily_quiz "
         "timer=30s countdown=20/10/5 reminders=on optin_reminder=3d quiz_alerts=10:00/19:00_Dubai "
         "legacy_image_quiz=off test_probe=off public_image_worker=off daily_schedule_enabled=%s "
         "auto_rewards=%s result_channel=%s",
