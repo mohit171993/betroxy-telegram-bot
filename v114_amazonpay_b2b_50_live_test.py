@@ -3,6 +3,7 @@ import time
 
 import bot
 import v113_text_quiz_ux as v113
+import v87_single_optin_reminder as v87
 
 v110 = v113.v110
 v111 = v113.v111
@@ -20,6 +21,7 @@ TEST_USERNAME = "mohit_97saxena"
 TEST_OPERATOR = "GPAPGV"
 TEST_AMOUNT = 50
 TEST_PERIOD_KEY = "manual_test:amazonpay_b2b:inr50:v114"
+REMINDER_TEST_KEY = "optin_reminder_test_v114_restore"
 
 
 def _find_test_user():
@@ -87,7 +89,6 @@ def _run_approved_live_test():
     status = str(award.get("status") or "")
     attempts = int(award.get("issue_attempts") or 0)
 
-    # Strict duplicate-purchase guard: startup/redeploy must never buy twice.
     if status == "delivered":
         bot.logger.warning("V114_AMAZONPAY50 result=already_delivered award=%s order=%s", award.get("id"), award.get("provider_order_id"))
         return
@@ -133,8 +134,32 @@ def _run_approved_live_test():
     )
 
 
+def _send_controlled_reminder_test():
+    time.sleep(18)
+    try:
+        lead = _find_test_user()
+        if not lead or not lead.get("reachable_bot"):
+            bot.logger.warning("V114_REMINDER_TEST result=blocked reason=test_user_unavailable")
+            return
+        uid = int(lead["telegram_user_id"])
+        keyboard = [
+            [{"text": "🏆 Join Sports Challenge", "url": v83.PREFERENCES_DEEPLINK}],
+            [{"text": "🔔 Choose My Updates", "url": v83.PREFERENCES_DEEPLINK}],
+        ]
+        text = (
+            "🏆 <b>Want to join the BETROXY Sports Challenge?</b>\n\n"
+            "Choose only the updates you want — Sports, Promotions or Quiz & Rewards. "
+            "Quiz participants can earn points and appear on the weekly leaderboard.\n\n"
+            "No selection means no recurring updates, and you can stop anytime."
+        )
+        sent = bool(v83._send_claimed(uid, "optin", REMINDER_TEST_KEY, text, keyboard))
+        bot.logger.warning("V114_REMINDER_TEST sent=%s uid=%s", sent, uid)
+    except Exception:
+        bot.logger.exception("V114_REMINDER_TEST_FAILED")
+
+
 bot.logger.warning(
-    "V114_AMAZON_PAY_B2B_50_TEST approved=on one_time=on operator=GPAPGV amount=50 target=@mohit_97saxena duplicate_purchase_guard=on text_quiz=v113"
+    "V114_AMAZON_PAY_B2B_50_TEST approved=on one_time=on operator=GPAPGV amount=50 target=@mohit_97saxena duplicate_purchase_guard=on text_quiz=v113 v87_reminder=on"
 )
 
 
@@ -151,7 +176,8 @@ if __name__ == "__main__":
     v88.v63.apply_signup_cta()
     v85._enable_smart_reply_without_reset()
     threading.Thread(target=v110._public_worker, name="betroxy-v110-public-worker", daemon=True).start()
-    threading.Thread(target=v110.v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
+    threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
+    threading.Thread(target=_send_controlled_reminder_test, name="betroxy-reminder-test", daemon=True).start()
     bot.logger.warning("V114 polling handover delay=12s")
     time.sleep(12)
     bot.main()
