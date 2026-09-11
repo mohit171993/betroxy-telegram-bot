@@ -1,33 +1,32 @@
 """Keep /start and Telegram Business first-reply menus aligned."""
 import bot
 
+MINIAPP_DEEPLINK = "https://t.me/BetroxyBot/sportsbook?startapp=sportsbook"
+OFFICIAL_BOT = "BetroxyOfficialBot"
+
+
+def _bot_deeplink(payload):
+    return f"https://t.me/{OFFICIAL_BOT}?start={payload}"
+
 
 def install(compact_menu, business_module):
     """Use the six-action customer navigation in both customer entry paths.
 
-    Telegram Business messages cannot reliably use callback/WebApp buttons, so
-    the Business version uses URL/deep-link equivalents while keeping the same
-    six visible customer choices.
+    Telegram Business replies use URL/deep-link equivalents, while every action
+    resolves to the same working destination as the direct-bot customer menu.
     """
     v75 = business_module
     biz51 = v75.biz51
     previous_payload = v75._business_reply_payload
 
-    quiz_url = "https://t.me/BetroxyOfficialBot?start=freequiz"
-    rewards_url = "https://t.me/BetroxyOfficialBot?start=rewards"
-    account_url = "https://betroxy.com/"
-    updates_url = "https://t.me/betroxycasino"
-    support_url = "https://t.me/betroxysports"
-
     def business_customer_menu(styled=True):
-        # Same six visible actions as /start; URL-only for Telegram Business.
         return bot.InlineKeyboardMarkup([
-            [bot.InlineKeyboardButton("🚀 Open BETROXY", url=bot.APP_URL)],
-            [bot.InlineKeyboardButton("🏆 Daily Quiz", url=quiz_url)],
-            [bot.InlineKeyboardButton("🎁 My Rewards", url=rewards_url)],
-            [bot.InlineKeyboardButton("👤 My Account", url=account_url)],
-            [bot.InlineKeyboardButton("📢 Updates & Promotions", url=updates_url)],
-            [bot.InlineKeyboardButton("🎧 Help & Support", url=support_url)],
+            [bot.InlineKeyboardButton("🚀 Open BETROXY", url=MINIAPP_DEEPLINK)],
+            [bot.InlineKeyboardButton("🏆 Daily Quiz", url=_bot_deeplink("dailyquiz"))],
+            [bot.InlineKeyboardButton("🎁 My Rewards", url=_bot_deeplink("rewards"))],
+            [bot.InlineKeyboardButton("👤 My Account", url=_bot_deeplink("account"))],
+            [bot.InlineKeyboardButton("📢 Updates & Promotions", url=_bot_deeplink("updates"))],
+            [bot.InlineKeyboardButton("🎧 Help & Support", url=_bot_deeplink("support"))],
         ])
 
     def unified_business_payload(intent, first_reply=False):
@@ -43,6 +42,7 @@ def install(compact_menu, business_module):
 
     bot.logger.warning(
         "UNIFIED_CUSTOMER_MENU active=on start=compact6 business_dm=compact6 "
-        "business_buttons=url_compatible smart_intent_replies=preserved"
+        "business_open=telegram_miniapp business_account=bot_deeplink "
+        "business_updates=bot_deeplink business_support=bot_deeplink"
     )
     return business_customer_menu
