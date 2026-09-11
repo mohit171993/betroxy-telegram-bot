@@ -21,6 +21,18 @@ def install():
         bot.logger.exception("WELCOME_EXPERIENCE_V2_INSTALL_FAILED")
         raise
 
+    # Admin-controlled Banner Manager. It imports the existing four locked
+    # channel creatives as fallbacks, allows no-code welcome/banner replacement,
+    # and rotates additional approved quiz creatives round-robin by IST day.
+    try:
+        import banner_manager
+        import banner_manager_runtime
+        banner_manager.install()
+        banner_manager_runtime.install()
+    except Exception:
+        bot.logger.exception("BANNER_MANAGER_INSTALL_FAILED")
+        raise
+
     # Install the Business enquiry follow-up policy after all legacy engagement
     # modules have loaded so V83's worker resolves the patched selector at runtime.
     try:
@@ -41,6 +53,7 @@ def install():
         raise
 
     bot.logger.warning(
-        "FIXED_CHANNEL_IMAGE_TEST deprecated=on active=off replacement=channel_media_manager_admin_upload welcome_v2=on"
+        "FIXED_CHANNEL_IMAGE_TEST deprecated=on active=off replacement=channel_media_manager_admin_upload "
+        "welcome_v2=on banner_manager=on channel_rotation=round_robin_daily_IST"
     )
     return bot.callback_handler
