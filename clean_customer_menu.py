@@ -20,14 +20,23 @@ _old_start = bot.start
 MINIAPP_DEEPLINK = "https://t.me/BetroxyBot/sportsbook?startapp=sportsbook"
 
 
+def _menu_button(text, *, style=None, **kwargs):
+    """Create a button with Bot API styling while staying compatible with PTB 21.x."""
+    api_kwargs = {"style": style} if style else None
+    return bot.InlineKeyboardButton(text, api_kwargs=api_kwargs, **kwargs)
+
+
 def compact_public_menu(user_id=None):
+    """Keep BETROXY as the dominant CTA; quiz/rewards remain secondary actions."""
     return bot.InlineKeyboardMarkup([
-        [bot.InlineKeyboardButton("🚀 Open BETROXY", url=MINIAPP_DEEPLINK)],
-        [bot.InlineKeyboardButton("🏆 Daily Quiz", callback_data="compact_daily_quiz")],
-        [bot.InlineKeyboardButton("🎁 My Rewards", callback_data="v89_my_rewards")],
-        [bot.InlineKeyboardButton("👤 My Account", callback_data="compact_account")],
-        [bot.InlineKeyboardButton("📢 Updates & Promotions", callback_data="compact_updates")],
-        [bot.InlineKeyboardButton("🎧 Help & Support", callback_data="compact_support")],
+        [_menu_button("🚀 Open BETROXY", url=MINIAPP_DEEPLINK, style="success")],
+        [_menu_button("🏆 Daily Quiz", callback_data="compact_daily_quiz", style="primary")],
+        [_menu_button("🎁 My Rewards", callback_data="v89_my_rewards", style="primary")],
+        [
+            _menu_button("👤 My Account", callback_data="compact_account"),
+            _menu_button("📢 Updates & Promotions", callback_data="compact_updates"),
+        ],
+        [_menu_button("🎧 Help & Support", callback_data="compact_support")],
     ])
 
 
@@ -50,29 +59,29 @@ def _account_text(uid):
 
 def _account_markup():
     return bot.InlineKeyboardMarkup([
-        [bot.InlineKeyboardButton("🎁 My Rewards", callback_data="v89_my_rewards")],
-        [bot.InlineKeyboardButton("📱 Mobile for Rewards", callback_data="v89_mobile")],
-        [bot.InlineKeyboardButton("🔔 Notification Preferences", callback_data="eng_preferences")],
-        [bot.InlineKeyboardButton("🚀 Open BETROXY", url=MINIAPP_DEEPLINK)],
-        [bot.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="compact_home")],
+        [_menu_button("🎁 My Rewards", callback_data="v89_my_rewards", style="primary")],
+        [_menu_button("📱 Mobile for Rewards", callback_data="v89_mobile")],
+        [_menu_button("🔔 Notification Preferences", callback_data="eng_preferences")],
+        [_menu_button("🚀 Open BETROXY", url=MINIAPP_DEEPLINK, style="success")],
+        [_menu_button("⬅️ Back to Main Menu", callback_data="compact_home")],
     ])
 
 
 def _updates_markup():
     promo_url = str(getattr(v83, "PROMOTIONS_URL", "") or bot.UPDATES_URL)
     return bot.InlineKeyboardMarkup([
-        [bot.InlineKeyboardButton("🎁 Promotions", url=promo_url)],
-        [bot.InlineKeyboardButton("🔔 Notification Preferences", callback_data="eng_preferences")],
-        [bot.InlineKeyboardButton("📢 BETROXY Updates Channel", url=bot.UPDATES_URL)],
-        [bot.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="compact_home")],
+        [_menu_button("🎁 Promotions", url=promo_url, style="primary")],
+        [_menu_button("🔔 Notification Preferences", callback_data="eng_preferences")],
+        [_menu_button("📢 BETROXY Updates Channel", url=bot.UPDATES_URL, style="primary")],
+        [_menu_button("⬅️ Back to Main Menu", callback_data="compact_home")],
     ])
 
 
 def _support_markup():
     return bot.InlineKeyboardMarkup([
-        [bot.InlineKeyboardButton("🎧 Telegram Support", url=bot.TELEGRAM_SUPPORT_URL)],
-        [bot.InlineKeyboardButton("💬 WhatsApp Support", url=bot.WHATSAPP_SUPPORT_URL)],
-        [bot.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="compact_home")],
+        [_menu_button("🎧 Telegram Support", url=bot.TELEGRAM_SUPPORT_URL)],
+        [_menu_button("💬 WhatsApp Support", url=bot.WHATSAPP_SUPPORT_URL)],
+        [_menu_button("⬅️ Back to Main Menu", callback_data="compact_home")],
     ])
 
 
@@ -124,7 +133,7 @@ async def compact_callback_handler(update, context):
             )
         return await _show(
             q,
-            "👋 <b>Welcome to BETROXY</b>\n\nChoose an option below.",
+            "🚀 <b>BETROXY</b>\n\nOpen BETROXY for the full experience. Daily Quiz, rewards and updates are available below.\n\nChoose what you want to do 👇",
             compact_public_menu(q.from_user.id),
         )
     return await _old_callback(update, context)
@@ -172,7 +181,11 @@ def _diagnostic():
         "🎧 Help & Support": ("compact_support", None),
     }
     ok = all(actions.get(k) == v for k, v in required.items())
-    bot.logger.warning("COMPACT_MENU_INTEGRITY ok=%s miniapp=telegram account=callback updates=callback support=callback", ok)
+    bot.logger.warning(
+        "COMPACT_MENU_INTEGRITY ok=%s miniapp=telegram account=callback updates=callback support=callback "
+        "cta_style=success quiz_style=primary rewards_style=primary compact_secondary_row=on",
+        ok,
+    )
     if not ok:
         raise RuntimeError("Compact customer menu action integrity failed")
 
@@ -187,5 +200,6 @@ _diagnostic()
 
 bot.logger.warning(
     "COMPACT_CUSTOMER_MENU active=on primary_actions=6 stable_actions=on miniapp=telegram_deeplink "
-    "account=callback updates=callback support=callback daily_quiz=v110_30s"
+    "account=callback updates=callback support=callback daily_quiz=v110_30s "
+    "cta_style=success quiz_style=primary rewards_style=primary compact_secondary_row=on"
 )
