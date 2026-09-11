@@ -88,29 +88,30 @@ def _dispatch(kind):
 
     if kind == "afternoon":
         text = (
-            "🏆 <b>BETROXY Daily Quiz — Don't Miss Today's Challenge</b>\n\n"
-            "You still have time to complete today's 7-question quiz.\n\n"
+            "🏆 <b>Can You Reach Today's Top 3?</b>\n\n"
+            "The BETROXY Daily Quiz leaderboard is still moving — and you haven't completed today's challenge yet.\n\n"
             "🎁 <b>₹1,000 Amazon Pay Gift Voucher prize pool</b>\n"
             "🥇 1st — ₹500\n"
             "🥈 2nd — ₹300\n"
             "🥉 3rd — ₹200\n\n"
-            "⏱ 30 seconds per question\n"
-            "💯 Free to participate — no deposit or wager required\n"
-            "⏰ Entries close at <b>9:00 PM IST</b>.\n\n"
-            "🏆 Play now and get your score on the leaderboard."
+            "7 questions • 30 seconds each\n"
+            "🎯 Accuracy comes first; hard-question accuracy and speed break ties\n"
+            "💯 Free to participate — no deposit or wager required\n\n"
+            "⏰ Entries close at <b>9:00 PM IST</b>.\n"
+            "🏆 Play now and put your score on the leaderboard."
         )
     elif kind == "last_chance":
         text = (
-            "⏰ <b>BETROXY Daily Quiz — Last Chance Today</b>\n\n"
-            "You haven't completed today's 7-question challenge yet.\n\n"
+            "⏰ <b>Only 2 Hours Left — Final Call</b>\n\n"
+            "You still haven't completed today's BETROXY Daily Quiz. Entries close at <b>9:00 PM IST</b>.\n\n"
             "🎁 <b>₹1,000 Amazon Pay Gift Voucher prize pool</b>\n"
             "🥇 1st — ₹500\n"
             "🥈 2nd — ₹300\n"
             "🥉 3rd — ₹200\n\n"
-            "⏱ 30 seconds per question\n"
-            "💯 Free to participate — no deposit or wager required\n"
-            "⏰ Closes at <b>9:00 PM IST</b>\n\n"
-            "🏆 Play now before entries close."
+            "7 questions • 30 seconds each • one attempt today\n"
+            "💯 Free to participate — no deposit or wager required\n\n"
+            "🔥 This is your last reminder for today's challenge.\n"
+            "🏆 Play now before the leaderboard closes."
         )
     else:
         text = (
