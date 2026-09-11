@@ -161,7 +161,10 @@ def alert_worker():
         time.sleep(30)
 
 
-# Keep the stable production media manager active while the fixed-image test is
-# prepared separately. No additional channel permission is granted here.
+# Fixed production media manager: exact approved Telegram file_ids only.
 import channel_media_manager as channel_media_manager
 channel_media_manager.install(v110, schedule)
+
+# Admin-only private end-to-end media test. Never posts to the public channel.
+import channel_media_private_test as channel_media_private_test
+channel_media_private_test.install()
