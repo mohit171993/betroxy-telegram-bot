@@ -86,12 +86,49 @@ def _db_prompt_state_selftest():
         raise RuntimeError("V107 reward mobile prompt-state self-test failed")
 
 
+def _giftport_failed_order_diagnostic():
+    try:
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id,status,provider_order_id,brand_code,amount,error_detail,
+                           provider_message,issue_attempts
+                    FROM reward_awards
+                    WHERE provider_order_id='BTRX_1' OR id=1
+                    ORDER BY CASE WHEN provider_order_id='BTRX_1' THEN 0 ELSE 1 END, id
+                    LIMIT 1
+                    """
+                )
+                award = cur.fetchone() or {}
+        state = v97._provider_state() or {}
+        bot.logger.warning(
+            "V107_GIFTPORT_FAIL_DIAG id=%s status=%s order=%s operator=%s amount=%s attempts=%s error=%s provider_message=%s state_error=%s",
+            award.get("id"), award.get("status"), award.get("provider_order_id"),
+            award.get("brand_code"), award.get("amount"), award.get("issue_attempts"),
+            str(award.get("error_detail") or "")[:500],
+            str(award.get("provider_message") or "")[:300],
+            str(state.get("last_error") or "")[:500],
+        )
+        # Read-only check only. Never retries the purchase.
+        ok, data = v97._giftport_post("status", {"order_id": "BTRX_1"})
+        bot.logger.warning(
+            "V107_GIFTPORT_STATUS_DIAG ok=%s status=%s message=%s order=%s transaction=%s amount=%s has_code=%s",
+            ok, data.get("status"), str(data.get("message") or "")[:500],
+            data.get("order_id"), data.get("transaction_id"), data.get("amount"),
+            bool(data.get("redeem_code")),
+        )
+    except Exception:
+        bot.logger.exception("V107_GIFTPORT_DIAG_FAILED")
+
+
 bot.logger.warning(
     "V107_MOBILE_PROMPT_STATE_FIX active=on prompt_timestamp=refresh_every_open manual_plus91_route=on"
 )
 
 
 if __name__ == "__main__":
+    _giftport_failed_order_diagnostic()
     _db_prompt_state_selftest()
     v105._startup_selftest()
     v97._startup_diagnostic()
