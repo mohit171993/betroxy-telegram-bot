@@ -11,11 +11,21 @@ _old_menu = bot.public_menu
 _old_callback = bot.callback_handler
 
 
-def _buttons(user_id=None):
+def _source_markup(user_id=None):
+    """Use the preserved pre-cleanup menu as the canonical action source."""
     try:
-        markup = _old_menu(user_id)
+        return v96._base_markup(user_id)
     except TypeError:
-        markup = _old_menu()
+        return v96._base_markup()
+    except Exception:
+        try:
+            return _old_menu(user_id)
+        except TypeError:
+            return _old_menu()
+
+
+def _buttons(user_id=None):
+    markup = _source_markup(user_id)
     return [b for row in (getattr(markup, "inline_keyboard", []) or []) for b in row]
 
 
@@ -112,12 +122,11 @@ async def compact_callback_handler(update, context):
 
 
 # Patch every live menu reference that the preserved /start chain resolves at call time.
-# This keeps referral/deep-link/start side effects untouched and only swaps the renderer.
 bot.public_menu = compact_public_menu
 v96.v96_public_menu = compact_public_menu
 v53.v53_public_menu = compact_public_menu
 bot.callback_handler = compact_callback_handler
 
 bot.logger.warning(
-    "COMPACT_CUSTOMER_MENU active=on primary_actions=6 secondary_actions=preserved start_renderer=patched"
+    "COMPACT_CUSTOMER_MENU active=on primary_actions=6 secondary_actions=preserved start_renderer=patched submenu_source=legacy"
 )
