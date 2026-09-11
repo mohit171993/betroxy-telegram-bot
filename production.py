@@ -1,4 +1,5 @@
 """Permanent BETROXY production entrypoint."""
+import html
 import importlib
 import threading
 import time
@@ -37,6 +38,20 @@ def _result_text(entry, rank, already=False):
     )
 
 
+def _leaderboard_text(campaign):
+    rows = v110._leaderboard(campaign["id"], 5)
+    lines = ["🏆 <b>LIVE BETROXY LEADERBOARD</b>", "", "Accuracy first; hard-question accuracy and speed break ties.", ""]
+    if not rows:
+        lines.append("No completed entries yet.")
+    else:
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+        for i, row in enumerate(rows[:5]):
+            name = str(row.get("telegram_username") or f"Player {str(row.get('telegram_user_id') or '')[-4:]}")
+            score = int(row.get("correct_count") or 0)
+            lines.append(f"{medals[i]} <b>{html.escape(name)}</b> — {score}/7")
+    return "\n".join(lines)
+
+
 def _install_text_only_quiz_results():
     original_start_quiz = v110._start_quiz
 
@@ -67,6 +82,34 @@ def _install_text_only_quiz_results():
     v110._start_quiz = _start_quiz_text
 
 
+def _install_text_only_leaderboard():
+    previous_callback = bot.callback_handler
+
+    async def _production_callback_handler(update, context):
+        q = getattr(update, "callback_query", None)
+        data = str(getattr(q, "data", "") or "") if q else ""
+        if q and data.startswith("v110_leaderboard"):
+            parts = data.split(":", 1)
+            campaign = None
+            if len(parts) == 2 and parts[1].isdigit():
+                campaign = v110._campaign(int(parts[1]))
+            if not campaign:
+                campaign = v110._today_campaign(test_mode=not v110.PUBLIC_ENABLED)
+            await q.answer()
+            await q.message.reply_text(
+                _leaderboard_text(campaign),
+                parse_mode=bot.ParseMode.HTML,
+                reply_markup=bot.InlineKeyboardMarkup([
+                    [bot.InlineKeyboardButton("🚀 OPEN BETROXY", url=v110.OPEN_APP_URL)]
+                ]),
+            )
+            bot.logger.warning("QUIZ_TEXT_LEADERBOARD uid=%s campaign=%s image=off", q.from_user.id, campaign["id"])
+            return
+        return await previous_callback(update, context)
+
+    bot.callback_handler = _production_callback_handler
+
+
 def _feature_guard(compact_menu, quiz_alerts):
     menu = compact_menu.compact_public_menu(None)
     menu_buttons = [b for row in menu.inline_keyboard for b in row]
@@ -81,11 +124,13 @@ def _feature_guard(compact_menu, quiz_alerts):
         getattr(v110._finish_quiz, "__name__", "") == "_finish_quiz_text"
         and getattr(v110._start_quiz, "__name__", "") == "_start_quiz_text"
     )
+    leaderboard_text_only_ok = getattr(bot.callback_handler, "__name__", "") == "_production_callback_handler"
     required = {
         "quiz_text": callable(getattr(v110, "_send_question_to_user", None)),
         "daily_quiz_route": quiz_route_ok,
         "quiz_30s_timer": timer_route_ok,
         "quiz_result_text_only": result_text_only_ok,
+        "quiz_leaderboard_text_only": leaderboard_text_only_ok,
         "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)) and reminder_patch_ok,
         "rewards": callable(getattr(v97, "_issue_award", None)),
         "engagement": callable(getattr(v83, "_worker_loop", None)),
@@ -95,7 +140,7 @@ def _feature_guard(compact_menu, quiz_alerts):
     }
     missing = [name for name, ok in required.items() if not ok]
     state = " ".join(f"{name}={'ON' if ok else 'OFF'}" for name, ok in required.items())
-    bot.logger.warning("PRODUCTION_FEATURE_GUARD %s legacy_image_quiz=OFF result_image=OFF test_probe=OFF", state)
+    bot.logger.warning("PRODUCTION_FEATURE_GUARD %s legacy_image_quiz=OFF result_image=OFF leaderboard_image=OFF test_probe=OFF", state)
     if missing:
         raise RuntimeError("Required BETROXY features missing: " + ", ".join(missing))
 
@@ -105,9 +150,13 @@ def main():
     v111._compatibility_selftest()
     compact_menu = importlib.import_module("clean_customer_menu")
     quiz_alerts = importlib.import_module("daily_quiz_alerts")
+
+    # Re-assert all approved runtime behavior after legacy imports.
     reminder.v83._worker_cycle = reminder._v87_worker_cycle
     v83._worker_cycle = reminder._v87_worker_cycle
     _install_text_only_quiz_results()
+    _install_text_only_leaderboard()
+
     _feature_guard(compact_menu, quiz_alerts)
     v97._startup_diagnostic()
     v96._startup_diagnostic()
@@ -120,7 +169,7 @@ def main():
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
     bot.logger.warning(
-        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off "
+        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off leaderboard_image=off "
         "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
         "quiz_alerts=10:00/19:00_Dubai legacy_image_quiz=off test_probe=off public_image_worker=off "
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
