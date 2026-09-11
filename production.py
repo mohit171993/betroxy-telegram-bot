@@ -20,6 +20,10 @@ v88 = v110.v88
 v85 = v110.v85
 v83 = v110.v83
 
+# Daily quiz prizes must remain staged until an admin explicitly approves them.
+# Ignore any stale Railway environment value that might request automatic issuance.
+daily_schedule.AUTO_REWARDS_ENABLED = False
+
 
 def _result_rows(campaign):
     return [
@@ -145,6 +149,7 @@ def _feature_guard(compact_menu, quiz_alerts, business_menu=None, dm_reply_handl
         "quiz_leaderboard_text_only": leaderboard_text_only_ok,
         "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)) and reminder_patch_ok,
         "rewards": callable(getattr(v97, "_issue_award", None)),
+        "manual_quiz_rewards_only": getattr(daily_schedule, "AUTO_REWARDS_ENABLED", True) is False,
         "engagement": callable(getattr(v83, "_worker_loop", None)),
         "daily_schedule": callable(getattr(daily_schedule, "schedule_worker", None)),
         "quiz_alerts": callable(getattr(quiz_alerts, "alert_worker", None)),
@@ -161,6 +166,8 @@ def _feature_guard(compact_menu, quiz_alerts, business_menu=None, dm_reply_handl
 
 
 def main():
+    # Re-assert manual-only daily quiz rewards after all imports.
+    daily_schedule.AUTO_REWARDS_ENABLED = False
     v110._ensure_schema()
     v111._compatibility_selftest()
     compact_menu = importlib.import_module("clean_customer_menu")
@@ -207,7 +214,7 @@ def main():
     bot.logger.warning(
         "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off leaderboard_image=off "
         "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
-        "quiz_alerts=10:00/19:00_Dubai customer_menu=start_and_business_same6 business_greeting_reply=on "
+        "quiz_alerts=10:00/16:00/19:00_IST customer_menu=start_and_business_same6 business_greeting_reply=on "
         "daily_quiz_admin_rewards=on reward_code_display_fix=on legacy_image_quiz=off test_probe=off public_image_worker=off "
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
         daily_schedule.SCHEDULE_ENABLED, daily_schedule.AUTO_REWARDS_ENABLED, daily_schedule.RESULT_CHANNEL_ENABLED,
