@@ -20,6 +20,16 @@ def install():
         bot.logger.exception("BUSINESS_FOLLOWUP_POLICY_INSTALL_FAILED")
         raise
 
+    # One-time public connection verification requested after the bot was added
+    # as @betroxycasino admin. This uses the real production schedule/media path,
+    # then removes its temporary test post automatically.
+    try:
+        import channel_connection_test
+        channel_connection_test.start()
+    except Exception:
+        bot.logger.exception("CHANNEL_CONNECTION_TEST_INSTALL_FAILED")
+        raise
+
     bot.logger.warning(
         "FIXED_CHANNEL_IMAGE_TEST deprecated=on active=off replacement=channel_media_manager_admin_upload"
     )
