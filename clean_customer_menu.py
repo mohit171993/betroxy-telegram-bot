@@ -53,22 +53,27 @@ def _clone(b, label):
 
 
 def compact_public_menu(user_id=None):
+    # Preserve the existing Open App action when available.
     app = _clone(_find(user_id, "open betroxy", "open app", "play now"), "🚀 Open BETROXY")
-    quiz = _clone(_find(user_id, "free quiz", "daily quiz"), "🏆 Daily Quiz")
-    rewards = _clone(_find(user_id, "my rewards"), "🎁 My Rewards")
-    support = _clone(_find(user_id, "help & support", "support"), "🎧 Help & Support")
-    rows = []
-    if app:
-        rows.append([app])
-    if quiz:
-        rows.append([quiz])
-    if rewards:
-        rows.append([rewards])
-    rows.append([bot.InlineKeyboardButton("👤 My Account", callback_data="compact_account")])
-    rows.append([bot.InlineKeyboardButton("📢 Updates & Promotions", callback_data="compact_updates")])
-    if support:
-        rows.append([support])
-    return bot.InlineKeyboardMarkup(rows)
+    if not app:
+        app = bot.InlineKeyboardButton("🚀 Open BETROXY", url=bot.APP_URL)
+
+    # These actions are explicit so the compact menu always contains exactly six
+    # primary choices even if labels in older menu layers change later.
+    quiz = bot.InlineKeyboardButton("🏆 Daily Quiz", callback_data="v96_join_free_quiz")
+    rewards = bot.InlineKeyboardButton("🎁 My Rewards", callback_data="v89_my_rewards")
+    account = bot.InlineKeyboardButton("👤 My Account", callback_data="compact_account")
+    updates = bot.InlineKeyboardButton("📢 Updates & Promotions", callback_data="compact_updates")
+    support = bot.InlineKeyboardButton("🎧 Help & Support", url=bot.TELEGRAM_SUPPORT_URL)
+
+    return bot.InlineKeyboardMarkup([
+        [app],
+        [quiz],
+        [rewards],
+        [account],
+        [updates],
+        [support],
+    ])
 
 
 def _submenu(user_id, kind):
@@ -128,5 +133,5 @@ v53.v53_public_menu = compact_public_menu
 bot.callback_handler = compact_callback_handler
 
 bot.logger.warning(
-    "COMPACT_CUSTOMER_MENU active=on primary_actions=6 secondary_actions=preserved start_renderer=patched submenu_source=legacy"
+    "COMPACT_CUSTOMER_MENU active=on primary_actions=6 guaranteed=on secondary_actions=preserved start_renderer=patched submenu_source=legacy"
 )
