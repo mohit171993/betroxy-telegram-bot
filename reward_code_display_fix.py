@@ -3,6 +3,10 @@
 For Amazon Pay B2B (GPAPGV), GiftPort's `redeem_code` value is a provider/reference
 number in our live response, while `card_no` is the customer-facing voucher/redeem
 code. Never label the reference number as the redeem code.
+
+This module also fixes GiftPort catalogue validation for variable-value products.
+When the catalogue marks a product as variable, an amount does not need to appear
+in the fixed-denomination list. Fixed-value products remain strictly validated.
 """
 import html
 
@@ -10,6 +14,37 @@ import bot
 
 
 def install(v97, v89, v83):
+    # Preserve strict denomination protection for fixed-value products, but do
+    # not reject a valid amount merely because a variable-value product's
+    # catalogue also includes a denomination list.
+    def _validate_reward_product(operator_code, amount):
+        row = v97._catalogue_row(operator_code)
+        if not row and v97._giftport_ready():
+            v97._sync_catalogue()
+            row = v97._catalogue_row(operator_code)
+        if not row:
+            return False, f"Giftport operator {operator_code} is not available in the synced catalogue", None
+
+        denoms = v97._parse_denominations(row.get("denominations"))
+        variable = bool(row.get("variable"))
+        if (
+            v97.GIFTPORT_STRICT_DENOMINATIONS
+            and not variable
+            and denoms
+            and float(amount) not in {float(x) for x in denoms}
+        ):
+            options = ", ".join(
+                f"₹{int(x):,}" if float(x).is_integer() else f"₹{x}"
+                for x in sorted(denoms)
+            )
+            return False, (
+                f"₹{amount:,} is not listed for {row.get('brand_name')}. "
+                f"Available: {options}"
+            ), row
+        return True, "ok", row
+
+    v97._validate_reward_product = _validate_reward_product
+
     def _reward_fields(row):
         brand = str(row.get("brand_code") or "").strip().upper()
         provider_ref = str(row.get("voucher_code") or "").strip()
@@ -119,5 +154,18 @@ def install(v97, v89, v83):
     v89._my_rewards_text = _my_rewards_text
     v97.v89._my_rewards_text = _my_rewards_text
     v97._deliver_award = _deliver_award
-    bot.logger.warning("REWARD_CODE_DISPLAY_FIX active=on GPAPGV card_no=redeem_code redeem_code=reference")
+
+    try:
+        gp = v97._catalogue_row("GPAPGV") or {}
+        bot.logger.warning(
+            "REWARD_DENOMINATION_FIX operator=GPAPGV variable=%s denominations=%s strict=%s",
+            bool(gp.get("variable")), str(gp.get("denominations") or "")[:300],
+            bool(v97.GIFTPORT_STRICT_DENOMINATIONS),
+        )
+    except Exception:
+        bot.logger.exception("REWARD_DENOMINATION_FIX_DIAGNOSTIC_FAILED")
+
+    bot.logger.warning(
+        "REWARD_CODE_DISPLAY_FIX active=on GPAPGV card_no=redeem_code redeem_code=reference variable_value_validation=on"
+    )
     return _my_rewards_text, _deliver_award
