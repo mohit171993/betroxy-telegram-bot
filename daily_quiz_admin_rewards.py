@@ -1,10 +1,12 @@
 """Admin-only approval flow for today's BETROXY Daily Quiz rewards.
 
 This adds a visible Daily Quiz Rewards entry inside the existing Reward Center.
-Nothing is issued from simply opening the screen: the admin must explicitly tap
-Approve & Issue ₹1,000. Existing award idempotency/provider guards remain in use.
+Rewards are strictly locked until the daily quiz has closed and the 21:05 Dubai
+final-result step has completed. Nothing is issued from simply opening the screen:
+the admin must explicitly tap Approve & Issue ₹1,000 after finalisation.
 """
 import html
+from datetime import datetime, timezone
 
 import bot
 import daily_quiz_schedule as schedule
@@ -26,6 +28,24 @@ def _period_key(campaign):
     return f"daily_quiz:{campaign['campaign_date']}"
 
 
+def _finalization_state(campaign):
+    """Return whether rewards are allowed to be approved for this campaign.
+
+    Hard gate 1: current time must be at/after today's 21:05 Dubai result time.
+    Hard gate 2: when public result announcements are enabled, the final result
+    must actually have been marked delivered before approval is exposed.
+    """
+    _, result_utc = schedule._day_bounds(campaign.get("campaign_date"))
+    now_utc = datetime.now(timezone.utc)
+    time_ready = now_utc >= result_utc
+    announced = schedule._result_already_sent(campaign["id"])
+    if not time_ready:
+        return False, "Results are provisional until 21:05 Dubai time."
+    if schedule.RESULT_CHANNEL_ENABLED and not announced:
+        return False, "Waiting for the public final-result announcement to complete."
+    return True, "Final results announced. Rewards may now be approved."
+
+
 def _award_for_rank(campaign, rank):
     with bot.get_db() as conn:
         with conn.cursor() as cur:
@@ -37,6 +57,9 @@ def _award_for_rank(campaign, rank):
 
 
 def _stage_today(campaign, rows):
+    ready, _ = _finalization_state(campaign)
+    if not ready:
+        return []
     staged = []
     for rank, amount in ((1, 500), (2, 300), (3, 200)):
         if len(rows) < rank:
@@ -51,7 +74,9 @@ def _winner_name(row):
     return str(row.get("telegram_username") or f"Player {str(row.get('telegram_user_id') or '')[-4:]}")
 
 
-def _status_label(award):
+def _status_label(award, finalized=True):
+    if not finalized:
+        return "Provisional — locked until final result"
     if not award:
         return "Not staged"
     status = str(award.get("status") or "queued")
@@ -72,11 +97,14 @@ def _status_label(award):
 
 
 def _screen_text(campaign, rows):
+    finalized, gate_message = _finalization_state(campaign)
     lines = [
         "🏆 <b>DAILY QUIZ REWARDS</b>",
         "",
         f"Date: <b>{html.escape(str(campaign.get('campaign_date')))}</b>",
         "Prize pool: <b>₹1,000</b>",
+        f"Finalisation: <b>{'OPEN FOR APPROVAL ✅' if finalized else 'LOCKED 🔒'}</b>",
+        f"{html.escape(gate_message)}",
         "",
     ]
     prizes = (500, 300, 200)
@@ -85,24 +113,31 @@ def _screen_text(campaign, rows):
         rank = i + 1
         if len(rows) >= rank:
             row = rows[i]
-            award = _award_for_rank(campaign, rank)
+            award = _award_for_rank(campaign, rank) if finalized else None
             lines.append(
                 f"{medals[i]} <b>#{rank} {html.escape(_winner_name(row))}</b> — "
                 f"{int(row.get('correct_count') or 0)}/7 — <b>₹{prizes[i]}</b>\n"
-                f"    Status: <b>{html.escape(_status_label(award))}</b>"
+                f"    Status: <b>{html.escape(_status_label(award, finalized=finalized))}</b>"
             )
         else:
             lines.append(f"{medals[i]} <b>#{rank}</b> — No completed winner yet — ₹{prizes[i]}")
-    lines += [
-        "",
-        "Tap <b>Approve & Issue ₹1,000</b> only after checking the three winners.",
-        "Duplicate protection and existing GiftPort balance/mobile checks remain active.",
-    ]
+    lines += [""]
+    if finalized:
+        lines += [
+            "Tap <b>Approve & Issue ₹1,000</b> only after checking the final three winners.",
+            "Duplicate protection and existing GiftPort balance/mobile checks remain active.",
+        ]
+    else:
+        lines += [
+            "The leaderboard shown here is provisional. Rankings can still change before close.",
+            "The approval button will appear only after the 21:05 Dubai final result is announced.",
+        ]
     return "\n".join(lines)
 
 
 def _screen_keyboard(campaign, rows):
-    ready = len(rows) >= 3
+    finalized, _ = _finalization_state(campaign)
+    ready = finalized and len(rows) >= 3
     buttons = []
     if ready:
         buttons.append([
@@ -131,6 +166,9 @@ def _patched_reward_center_keyboard():
 
 
 def _issue_approved_awards(campaign, rows):
+    finalized, reason = _finalization_state(campaign)
+    if not finalized:
+        raise RuntimeError(reason)
     awards = _stage_today(campaign, rows)
     results = []
     for award in awards:
@@ -156,7 +194,6 @@ def install():
     global _previous_callback
     _previous_callback = bot.callback_handler
 
-    # Make the existing Reward Center expose the new admin entry point.
     v97._reward_center_keyboard = _patched_reward_center_keyboard
     v89._reward_center_keyboard = _patched_reward_center_keyboard
 
@@ -172,7 +209,8 @@ def install():
         if data == "dq_rewards_today":
             await q.answer()
             campaign, rows = _today_snapshot()
-            _stage_today(campaign, rows)
+            if _finalization_state(campaign)[0]:
+                _stage_today(campaign, rows)
             await q.message.reply_text(
                 _screen_text(campaign, rows),
                 parse_mode=bot.ParseMode.HTML,
@@ -189,6 +227,10 @@ def install():
             campaign = schedule.v110._campaign(campaign_id)
             if not campaign:
                 await q.answer("Campaign not found", show_alert=True)
+                return
+            finalized, reason = _finalization_state(campaign)
+            if not finalized:
+                await q.answer(reason, show_alert=True)
                 return
             rows = schedule._final_rows(campaign_id)
             if len(rows) < 3:
@@ -214,5 +256,8 @@ def install():
         return await _previous_callback(update, context)
 
     bot.callback_handler = daily_quiz_reward_callback
-    bot.logger.warning("DAILY_QUIZ_ADMIN_REWARDS active=on admin_only=on manual_approval=on pool=1000")
+    bot.logger.warning(
+        "DAILY_QUIZ_ADMIN_REWARDS active=on admin_only=on manual_approval=on pool=1000 "
+        "approval_gate=21:05_Dubai+final_result_announced"
+    )
     return daily_quiz_reward_callback
