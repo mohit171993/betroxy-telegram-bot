@@ -74,17 +74,27 @@ def _dispatch(kind):
     key = _key(kind, local.date())
     if reminder:
         text = (
-            "⏰ <b>BETROXY Daily Quiz — Final Reminder</b>\n\n"
-            "Today's free sports challenge closes at <b>9:00 PM Dubai time</b>. "
-            "7 questions • 30 seconds each • one attempt today.\n\n"
+            "⏰ <b>BETROXY Daily Quiz — Last Chance Today</b>\n\n"
+            "You haven't completed today's 7-question challenge yet.\n\n"
+            "🎁 <b>₹1,000 Amazon Pay Gift Voucher prize pool</b>\n"
+            "🥇 1st — ₹500\n"
+            "🥈 2nd — ₹300\n"
+            "🥉 3rd — ₹200\n\n"
+            "⏱ 30 seconds per question\n"
+            "💯 Free to participate — no deposit or wager required\n"
+            "⏰ Closes at <b>9:00 PM Dubai time</b>\n\n"
             "🏆 Play now before entries close."
         )
     else:
         text = (
             "🏆 <b>Today's BETROXY Daily Quiz is OPEN</b>\n\n"
-            "Play anytime today until <b>9:00 PM Dubai time</b>. "
-            "7 questions • 30 seconds each • one attempt today.\n\n"
-            "🎁 Daily prize pool: ₹1,000."
+            "Play anytime today until <b>9:00 PM Dubai time</b>.\n\n"
+            "🎁 <b>₹1,000 Amazon Pay Gift Voucher prize pool</b>\n"
+            "🥇 1st — ₹500\n"
+            "🥈 2nd — ₹300\n"
+            "🥉 3rd — ₹200\n\n"
+            "7 questions • 30 seconds each • one attempt today\n"
+            "💯 Free to participate — no deposit or wager required."
         )
     users = _eligible_users(campaign["id"], reminder=reminder)
     sent = 0
@@ -93,12 +103,12 @@ def _dispatch(kind):
             sent += 1
         time.sleep(0.06)
     channel = _send_channel_once(campaign, kind, text)
-    bot.logger.warning("DAILY_QUIZ_ALERT kind=%s dm_sent=%s eligible=%s channel=%s", kind, sent, len(users), channel)
+    bot.logger.warning("DAILY_QUIZ_ALERT kind=%s dm_sent=%s eligible=%s channel=%s prizes=amazonpay_500_300_200", kind, sent, len(users), channel)
 
 
 def alert_worker():
     last_slot = None
-    bot.logger.warning("DAILY_QUIZ_ALERT_WORKER active=on open=10:00 reminder=19:00 tz=Asia/Dubai")
+    bot.logger.warning("DAILY_QUIZ_ALERT_WORKER active=on open=10:00 reminder=19:00 tz=Asia/Dubai prizes=amazonpay_500_300_200")
     while True:
         try:
             if schedule.SCHEDULE_ENABLED:
