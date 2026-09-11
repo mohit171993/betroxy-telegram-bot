@@ -1,105 +1,79 @@
-"""Compact BETROXY customer navigation.
+"""Stable BETROXY customer navigation.
 
-Reorganizes the existing live actions into six primary choices. Existing callbacks
-and URLs are preserved; secondary actions move into submenus.
+The six primary buttons are bound explicitly so later menu-label changes cannot
+silently replace Mini App/callback actions with website URLs or dead routes.
 """
+import html
+
 import bot
 import v96_customer_menu_final as v96
 import v53_attractive_customer_experience_bootstrap as v53
 import daily_quiz_schedule as daily_schedule
 
 v110 = daily_schedule.v110
+v83 = v110.v83
 
-_old_menu = bot.public_menu
 _old_callback = bot.callback_handler
+_old_start = bot.start
 
-
-def _source_markup(user_id=None):
-    """Use the preserved pre-cleanup menu as the canonical action source."""
-    try:
-        return v96._base_markup(user_id)
-    except TypeError:
-        return v96._base_markup()
-    except Exception:
-        try:
-            return _old_menu(user_id)
-        except TypeError:
-            return _old_menu()
-
-
-def _buttons(user_id=None):
-    markup = _source_markup(user_id)
-    return [b for row in (getattr(markup, "inline_keyboard", []) or []) for b in row]
-
-
-def _find(user_id, *needles):
-    for b in _buttons(user_id):
-        low = str(getattr(b, "text", "") or "").lower()
-        if any(n in low for n in needles):
-            return b
-    return None
-
-
-def _clone(b, label):
-    if not b:
-        return None
-    kwargs = {}
-    for attr in (
-        "url", "callback_data", "web_app", "login_url", "switch_inline_query",
-        "switch_inline_query_current_chat", "callback_game", "pay",
-        "switch_inline_query_chosen_chat", "copy_text",
-    ):
-        value = getattr(b, attr, None)
-        if value is not None:
-            kwargs[attr] = value
-    return bot.InlineKeyboardButton(label, **kwargs)
+# Always launch the actual @BetroxyBot Telegram Mini App, never the public website.
+MINIAPP_DEEPLINK = "https://t.me/BetroxyBot/sportsbook?startapp=sportsbook"
 
 
 def compact_public_menu(user_id=None):
-    app = _clone(_find(user_id, "open betroxy", "open app", "play now"), "🚀 Open BETROXY")
-    if not app:
-        app = bot.InlineKeyboardButton("🚀 Open BETROXY", url=bot.APP_URL)
-
-    # Explicit stable callbacks: do not inherit quiz routing from older menus.
-    quiz = bot.InlineKeyboardButton("🏆 Daily Quiz", callback_data="compact_daily_quiz")
-    rewards = bot.InlineKeyboardButton("🎁 My Rewards", callback_data="v89_my_rewards")
-    account = bot.InlineKeyboardButton("👤 My Account", callback_data="compact_account")
-    updates = bot.InlineKeyboardButton("📢 Updates & Promotions", callback_data="compact_updates")
-    support = bot.InlineKeyboardButton("🎧 Help & Support", url=bot.TELEGRAM_SUPPORT_URL)
-
     return bot.InlineKeyboardMarkup([
-        [app], [quiz], [rewards], [account], [updates], [support],
+        [bot.InlineKeyboardButton("🚀 Open BETROXY", url=MINIAPP_DEEPLINK)],
+        [bot.InlineKeyboardButton("🏆 Daily Quiz", callback_data="compact_daily_quiz")],
+        [bot.InlineKeyboardButton("🎁 My Rewards", callback_data="v89_my_rewards")],
+        [bot.InlineKeyboardButton("👤 My Account", callback_data="compact_account")],
+        [bot.InlineKeyboardButton("📢 Updates & Promotions", callback_data="compact_updates")],
+        [bot.InlineKeyboardButton("🎧 Help & Support", callback_data="compact_support")],
     ])
 
 
-def _submenu(user_id, kind):
-    if kind == "account":
-        specs = [
-            (("account & services",), "👤 Account & Services"),
-            (("transactions",), "🧾 Transactions"),
-            (("mobile for rewards", "verify mobile"), "📱 Mobile for Rewards"),
-            (("refer a friend",), "👥 Refer a Friend"),
-            (("how it works",), "ℹ️ How It Works"),
-        ]
-    else:
-        specs = [
-            (("promotions",), "🎁 Promotions"),
-            (("updates & quiz", "notification preferences"), "🔔 Notification Preferences"),
-            (("news & updates", "updates"), "📢 Updates"),
-        ]
-    rows = []
-    seen = set()
-    for needles, label in specs:
-        b = _find(user_id, *needles)
-        if not b:
-            continue
-        key = str(getattr(b, "callback_data", "") or getattr(b, "url", "") or label)
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append([_clone(b, label)])
-    rows.append([bot.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="compact_home")])
-    return bot.InlineKeyboardMarkup(rows)
+def _account_text(uid):
+    try:
+        mobile = v110._masked_mobile(uid)
+    except Exception:
+        mobile = "Not registered"
+    try:
+        consent = "ON ✅" if v110._has_consent(uid) else "Not completed"
+    except Exception:
+        consent = "Not completed"
+    return (
+        "👤 <b>My Account</b>\n\n"
+        f"📱 Mobile: <b>{html.escape(str(mobile))}</b>\n"
+        f"📣 Quiz communication consent: <b>{consent}</b>\n\n"
+        "Choose an option below."
+    )
+
+
+def _account_markup():
+    return bot.InlineKeyboardMarkup([
+        [bot.InlineKeyboardButton("🎁 My Rewards", callback_data="v89_my_rewards")],
+        [bot.InlineKeyboardButton("📱 Mobile for Rewards", callback_data="v89_mobile")],
+        [bot.InlineKeyboardButton("🔔 Notification Preferences", callback_data="eng_preferences")],
+        [bot.InlineKeyboardButton("🚀 Open BETROXY", url=MINIAPP_DEEPLINK)],
+        [bot.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="compact_home")],
+    ])
+
+
+def _updates_markup():
+    promo_url = str(getattr(v83, "PROMOTIONS_URL", "") or bot.UPDATES_URL)
+    return bot.InlineKeyboardMarkup([
+        [bot.InlineKeyboardButton("🎁 Promotions", url=promo_url)],
+        [bot.InlineKeyboardButton("🔔 Notification Preferences", callback_data="eng_preferences")],
+        [bot.InlineKeyboardButton("📢 BETROXY Updates Channel", url=bot.UPDATES_URL)],
+        [bot.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="compact_home")],
+    ])
+
+
+def _support_markup():
+    return bot.InlineKeyboardMarkup([
+        [bot.InlineKeyboardButton("🎧 Telegram Support", url=bot.TELEGRAM_SUPPORT_URL)],
+        [bot.InlineKeyboardButton("💬 WhatsApp Support", url=bot.WHATSAPP_SUPPORT_URL)],
+        [bot.InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="compact_home")],
+    ])
 
 
 async def _open_daily_quiz(q):
@@ -120,26 +94,87 @@ async def _open_daily_quiz(q):
     await v110._start_quiz(uid, username, campaign, source="compact_daily_quiz")
 
 
+async def _show(q, text, markup):
+    try:
+        await q.edit_message_text(text, parse_mode=bot.ParseMode.HTML, reply_markup=markup)
+    except Exception:
+        await q.message.reply_text(text, parse_mode=bot.ParseMode.HTML, reply_markup=markup)
+
+
 async def compact_callback_handler(update, context):
     q = update.callback_query
     data = str(q.data or "") if q else ""
     if q and data == "compact_daily_quiz":
         return await _open_daily_quiz(q)
-    if q and data in {"compact_account", "compact_updates", "compact_home"}:
+    if q and data in {"compact_account", "compact_updates", "compact_support", "compact_home"}:
         await q.answer()
-        uid = q.from_user.id
         if data == "compact_account":
-            text, markup = "👤 <b>My Account</b>\n\nChoose what you need.", _submenu(uid, "account")
-        elif data == "compact_updates":
-            text, markup = "📢 <b>Updates & Promotions</b>\n\nChoose an option.", _submenu(uid, "updates")
-        else:
-            text, markup = "👋 <b>Welcome to BETROXY</b>\n\nChoose an option below.", compact_public_menu(uid)
-        try:
-            await q.edit_message_text(text, parse_mode=bot.ParseMode.HTML, reply_markup=markup)
-        except Exception:
-            await q.message.reply_text(text, parse_mode=bot.ParseMode.HTML, reply_markup=markup)
-        return
+            return await _show(q, _account_text(q.from_user.id), _account_markup())
+        if data == "compact_updates":
+            return await _show(
+                q,
+                "📢 <b>Updates & Promotions</b>\n\nChoose what you want to open or manage.",
+                _updates_markup(),
+            )
+        if data == "compact_support":
+            return await _show(
+                q,
+                "🎧 <b>Help & Support</b>\n\nChoose how you would like to contact BETROXY support.",
+                _support_markup(),
+            )
+        return await _show(
+            q,
+            "👋 <b>Welcome to BETROXY</b>\n\nChoose an option below.",
+            compact_public_menu(q.from_user.id),
+        )
     return await _old_callback(update, context)
+
+
+async def compact_start(update, context):
+    """Preserve the complete existing /start chain, then honor Business deep links."""
+    result = await _old_start(update, context)
+    args = list(getattr(context, "args", []) or [])
+    payload = str(args[0]).strip().lower() if args else ""
+    msg = getattr(update, "effective_message", None)
+    user = getattr(update, "effective_user", None)
+    if not msg or not user:
+        return result
+    try:
+        if payload == "account":
+            await msg.reply_text(_account_text(user.id), parse_mode=bot.ParseMode.HTML, reply_markup=_account_markup())
+        elif payload == "updates":
+            await msg.reply_text(
+                "📢 <b>Updates & Promotions</b>\n\nChoose what you want to open or manage.",
+                parse_mode=bot.ParseMode.HTML,
+                reply_markup=_updates_markup(),
+            )
+        elif payload == "support":
+            await msg.reply_text(
+                "🎧 <b>Help & Support</b>\n\nChoose how you would like to contact BETROXY support.",
+                parse_mode=bot.ParseMode.HTML,
+                reply_markup=_support_markup(),
+            )
+    except Exception:
+        bot.logger.exception("COMPACT_START_DEEPLINK_FAILED payload=%s uid=%s", payload, user.id)
+    return result
+
+
+def _diagnostic():
+    menu = compact_public_menu(None)
+    buttons = [b for row in menu.inline_keyboard for b in row]
+    actions = {str(b.text): (getattr(b, "callback_data", None), getattr(b, "url", None)) for b in buttons}
+    required = {
+        "🚀 Open BETROXY": (None, MINIAPP_DEEPLINK),
+        "🏆 Daily Quiz": ("compact_daily_quiz", None),
+        "🎁 My Rewards": ("v89_my_rewards", None),
+        "👤 My Account": ("compact_account", None),
+        "📢 Updates & Promotions": ("compact_updates", None),
+        "🎧 Help & Support": ("compact_support", None),
+    }
+    ok = all(actions.get(k) == v for k, v in required.items())
+    bot.logger.warning("COMPACT_MENU_INTEGRITY ok=%s miniapp=telegram account=callback updates=callback support=callback", ok)
+    if not ok:
+        raise RuntimeError("Compact customer menu action integrity failed")
 
 
 # Patch every live menu reference that the preserved /start chain resolves at call time.
@@ -147,8 +182,10 @@ bot.public_menu = compact_public_menu
 v96.v96_public_menu = compact_public_menu
 v53.v53_public_menu = compact_public_menu
 bot.callback_handler = compact_callback_handler
+bot.start = compact_start
+_diagnostic()
 
 bot.logger.warning(
-    "COMPACT_CUSTOMER_MENU active=on primary_actions=6 guaranteed=on daily_quiz=v110_30s "
-    "secondary_actions=preserved start_renderer=patched submenu_source=legacy"
+    "COMPACT_CUSTOMER_MENU active=on primary_actions=6 stable_actions=on miniapp=telegram_deeplink "
+    "account=callback updates=callback support=callback daily_quiz=v110_30s"
 )
