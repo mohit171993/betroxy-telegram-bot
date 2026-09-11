@@ -21,30 +21,32 @@ v88 = v110.v88
 v85 = v110.v85
 v83 = v110.v83
 
+# Production UX policy: questions are Telegram text + answer buttons.
+# Legacy V110 hero/test image senders must never be started from production.py.
+# The public image worker is deliberately NOT started here.
+
 REQUIRED_FEATURES = {
     "quiz_text": callable(getattr(v110, "_send_question_to_user", None)),
     "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)),
     "rewards": callable(getattr(v97, "_issue_award", None)),
     "engagement": callable(getattr(v83, "_worker_loop", None)),
-    "sports": callable(getattr(v110, "_public_worker", None)),
 }
 
 
 def _feature_guard():
     missing = [name for name, ok in REQUIRED_FEATURES.items() if not ok]
     state = " ".join(f"{name}={'ON' if ok else 'OFF'}" for name, ok in REQUIRED_FEATURES.items())
-    bot.logger.warning("PRODUCTION_FEATURE_GUARD %s", state)
+    bot.logger.warning("PRODUCTION_FEATURE_GUARD %s legacy_image_quiz=OFF test_probe=OFF", state)
     if missing:
         raise RuntimeError("Required BETROXY features missing: " + ", ".join(missing))
 
 
 def main():
     v110._ensure_schema()
-    v110._selftest()
+    # Do not run V110 _selftest here: it renders legacy quiz graphics.
     v111._compatibility_selftest()
     _feature_guard()
 
-    # Preserve established startup hooks/diagnostics.
     v97._startup_diagnostic()
     v96._startup_diagnostic()
     v93._startup_pdf_diagnostic()
@@ -53,12 +55,14 @@ def main():
     v88.v63.apply_signup_cta()
     v85._enable_smart_reply_without_reset()
 
-    # v87 patches v83._worker_cycle at import time; therefore this single
-    # engagement worker includes the one-time opt-in reminder logic too.
-    threading.Thread(target=v110._public_worker, name="betroxy-public-worker", daemon=True).start()
+    # v87 patches the engagement worker cycle at import time, preserving the
+    # one-time opt-in reminder. No V110 public/image worker or test probe runs.
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
 
-    bot.logger.warning("BETROXY_PRODUCTION_BOOT permanent_entrypoint=on versioned_launcher=off")
+    bot.logger.warning(
+        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on reminders=on "
+        "legacy_image_quiz=off test_probe=off public_image_worker=off"
+    )
     time.sleep(12)
     bot.main()
 
