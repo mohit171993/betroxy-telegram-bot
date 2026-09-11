@@ -21,9 +21,21 @@ v83 = v110.v83
 
 
 def _feature_guard(compact_menu, quiz_alerts):
+    menu = compact_menu.compact_public_menu(None)
+    menu_buttons = [b for row in menu.inline_keyboard for b in row]
+    quiz_buttons = [b for b in menu_buttons if "daily quiz" in str(getattr(b, "text", "")).lower()]
+    quiz_route_ok = bool(quiz_buttons and getattr(quiz_buttons[0], "callback_data", None) == "compact_daily_quiz")
+    timer_route_ok = (
+        int(getattr(daily_schedule, "QUESTION_SECONDS", 0)) == 30
+        and getattr(v110, "_send_question_to_user", None) is getattr(daily_schedule, "_send_question_30s", None)
+    )
+    reminder_patch_ok = getattr(v83, "_worker_cycle", None) is getattr(reminder, "_worker_cycle_v87", None)
+
     required = {
         "quiz_text": callable(getattr(v110, "_send_question_to_user", None)),
-        "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)),
+        "daily_quiz_route": quiz_route_ok,
+        "quiz_30s_timer": timer_route_ok,
+        "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)) and reminder_patch_ok,
         "rewards": callable(getattr(v97, "_issue_award", None)),
         "engagement": callable(getattr(v83, "_worker_loop", None)),
         "daily_schedule": callable(getattr(daily_schedule, "schedule_worker", None)),
@@ -40,9 +52,8 @@ def _feature_guard(compact_menu, quiz_alerts):
 def main():
     v110._ensure_schema()
 
-    # Run compatibility checks before importing optional UI modules. Some UI
-    # modules intentionally patch callback/menu handlers, which would otherwise
-    # make the legacy compatibility assertion fail even though the routes work.
+    # Validate preserved legacy routes first. Optional UI modules are loaded only
+    # afterwards so their intentional patches cannot invalidate compatibility checks.
     v111._compatibility_selftest()
 
     compact_menu = importlib.import_module("clean_customer_menu")
@@ -62,9 +73,10 @@ def main():
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
 
     bot.logger.warning(
-        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on reminders=on compact_menu=on "
-        "quiz_alerts=10:00/19:00_Dubai legacy_image_quiz=off test_probe=off public_image_worker=off "
-        "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
+        "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on daily_quiz_route=compact_daily_quiz "
+        "timer=30s countdown=20/10/5 reminders=on optin_reminder=3d quiz_alerts=10:00/19:00_Dubai "
+        "legacy_image_quiz=off test_probe=off public_image_worker=off daily_schedule_enabled=%s "
+        "auto_rewards=%s result_channel=%s",
         daily_schedule.SCHEDULE_ENABLED,
         daily_schedule.AUTO_REWARDS_ENABLED,
         daily_schedule.RESULT_CHANNEL_ENABLED,
