@@ -1,4 +1,4 @@
-"""Highlight the post-quiz schedule in every BETROXY completion message."""
+"""Highlight post-quiz timing and activate winner announcements."""
 from __future__ import annotations
 
 import html
@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import bot
 import daily_quiz_experience_v2 as experience
+import quiz_winner_announcement
 
 _installed = False
 
@@ -44,7 +45,13 @@ def install(production_globals):
         return text
 
     production_globals["_result_text"] = _result_text_with_timeline
+
+    schedule = production_globals.get("daily_schedule")
+    if schedule is None:
+        raise RuntimeError("Daily quiz schedule is unavailable")
+    quiz_winner_announcement.install(schedule)
+
     _installed = True
     bot.logger.warning(
-        "QUIZ_COMPLETION_TIMELINE active=on leaderboard_lock=21:00_IST final_result=21:05_IST next_quiz=10:00_IST"
+        "QUIZ_COMPLETION_TIMELINE active=on leaderboard_lock=21:00_IST final_result=21:05_IST next_quiz=10:00_IST winner_announcement=on"
     )
