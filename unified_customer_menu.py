@@ -9,6 +9,12 @@ def _bot_deeplink(payload):
     return f"https://t.me/{OFFICIAL_BOT}?start={payload}"
 
 
+def _menu_button(text, *, style=None, **kwargs):
+    """Create Bot API styled buttons while remaining compatible with PTB 21.x."""
+    api_kwargs = {"style": style} if style else None
+    return bot.InlineKeyboardButton(text, api_kwargs=api_kwargs, **kwargs)
+
+
 def install(compact_menu, business_module):
     """Use the six-action customer navigation in both customer entry paths.
 
@@ -25,13 +31,17 @@ def install(compact_menu, business_module):
     previous_start = bot.start
 
     def business_customer_menu(styled=True):
+        success_style = "success" if styled else None
+        primary_style = "primary" if styled else None
         return bot.InlineKeyboardMarkup([
-            [bot.InlineKeyboardButton("🚀 Open BETROXY", url=MINIAPP_DEEPLINK)],
-            [bot.InlineKeyboardButton("🏆 Daily Quiz", url=_bot_deeplink("dailyquiz"))],
-            [bot.InlineKeyboardButton("🎁 My Rewards", url=_bot_deeplink("rewards"))],
-            [bot.InlineKeyboardButton("👤 My Account", url=_bot_deeplink("account"))],
-            [bot.InlineKeyboardButton("📢 Updates & Promotions", url=_bot_deeplink("updates"))],
-            [bot.InlineKeyboardButton("🎧 Help & Support", url=_bot_deeplink("support"))],
+            [_menu_button("🚀 Open BETROXY", url=MINIAPP_DEEPLINK, style=success_style)],
+            [_menu_button("🏆 Daily Quiz", url=_bot_deeplink("dailyquiz"), style=primary_style)],
+            [_menu_button("🎁 My Rewards", url=_bot_deeplink("rewards"), style=primary_style)],
+            [
+                _menu_button("👤 My Account", url=_bot_deeplink("account")),
+                _menu_button("📢 Updates & Promotions", url=_bot_deeplink("updates")),
+            ],
+            [_menu_button("🎧 Help & Support", url=_bot_deeplink("support"))],
         ])
 
     def unified_business_payload(intent, first_reply=False):
@@ -97,6 +107,7 @@ def install(compact_menu, business_module):
         "UNIFIED_CUSTOMER_MENU active=on start=compact6 business_dm=compact6 "
         "business_open=telegram_miniapp business_account=bot_deeplink "
         "business_updates=bot_deeplink business_support=bot_deeplink "
-        "dailyquiz_deeplink=direct_registration_or_quiz welcome_menu=off"
+        "dailyquiz_deeplink=direct_registration_or_quiz welcome_menu=off "
+        "cta_style=success quiz_style=primary rewards_style=primary compact_secondary_row=on"
     )
     return business_customer_menu
