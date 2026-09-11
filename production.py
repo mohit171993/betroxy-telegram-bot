@@ -24,6 +24,10 @@ v83 = v110.v83
 # Ignore any stale Railway environment value that might request automatic issuance.
 daily_schedule.AUTO_REWARDS_ENABLED = False
 
+# Current public BETROXY updates channel. Keep this authoritative in production
+# so renamed Telegram usernames cannot leave scheduled posts pointing at an old channel.
+v110.CHANNEL_CHAT = "@betroxyupdates"
+
 
 def _result_rows(campaign):
     return [
