@@ -147,6 +147,7 @@ def _feature_guard(compact_menu, quiz_alerts, business_menu=None, dm_reply_handl
         "quiz_30s_timer": timer_route_ok,
         "quiz_result_text_only": result_text_only_ok,
         "quiz_leaderboard_text_only": leaderboard_text_only_ok,
+        "daily_quiz_rotation": bool(getattr(v110, "_daily_rotation_installed", False)),
         "reminders": callable(getattr(reminder, "_send_single_optin_reminder", None)) and reminder_patch_ok,
         "rewards": callable(getattr(v97, "_issue_award", None)),
         "manual_quiz_rewards_only": getattr(daily_schedule, "AUTO_REWARDS_ENABLED", True) is False,
@@ -172,6 +173,14 @@ def main():
     v111._compatibility_selftest()
     compact_menu = importlib.import_module("clean_customer_menu")
     quiz_alerts = importlib.import_module("daily_quiz_alerts")
+
+    # Install the rotating daily experience before result wrappers are captured.
+    # Existing campaigns are frozen, so a deployment can never change questions
+    # after players have started. New campaigns use IST, themes and fresh questions.
+    quiz_experience = importlib.import_module("daily_quiz_experience")
+    quiz_experience.install(v110, quiz, daily_schedule, globals())
+    daily_schedule._original_today_campaign = v110._ensure_campaign
+    v110._today_campaign = daily_schedule._today_campaign_windowed
 
     # Re-assert all approved runtime behavior after legacy imports.
     reminder.v83._worker_cycle = reminder._v87_worker_cycle
@@ -214,7 +223,8 @@ def main():
     bot.logger.warning(
         "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off leaderboard_image=off "
         "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
-        "quiz_alerts=10:00/16:00/19:00_IST customer_menu=start_and_business_same6 business_greeting_reply=on "
+        "quiz_alerts=10:00/16:00/19:00_IST quiz_rotation=daily theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
+        "quiz_progress=on quiz_badges=on quiz_streaks=on customer_menu=start_and_business_same6 business_greeting_reply=on "
         "daily_quiz_admin_rewards=on reward_code_display_fix=on legacy_image_quiz=off test_probe=off public_image_worker=off "
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
         daily_schedule.SCHEDULE_ENABLED, daily_schedule.AUTO_REWARDS_ENABLED, daily_schedule.RESULT_CHANNEL_ENABLED,
