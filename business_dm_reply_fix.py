@@ -1,5 +1,10 @@
 """Production hotfix: Telegram Business enquiries receive a reliable first reply."""
+import html
+import json
+import threading
 import time
+
+import requests
 
 import bot
 from telegram.ext import ApplicationHandlerStop
@@ -143,9 +148,85 @@ async def business_message_update_with_menu_reply(update, context):
     raise ApplicationHandlerStop
 
 
+def _direct_business_send(enquiry):
+    """Send the same safe first-reply payload without needing the PTB context."""
+    intent = biz51._detect_intent(str(enquiry.get("last_message_text") or ""))
+    text, keyboard, stage = biz51._reply_payload(intent, first_reply=True)
+    markup = keyboard.to_dict() if keyboard else None
+    payload = {
+        "chat_id": str(enquiry["customer_chat_id"]),
+        "text": text,
+        "parse_mode": "HTML",
+        "business_connection_id": str(enquiry["connection_id"]),
+        "disable_web_page_preview": "true",
+    }
+    if markup:
+        payload["reply_markup"] = json.dumps(markup, separators=(",", ":"))
+
+    url = f"https://api.telegram.org/bot{bot.BOT_TOKEN}/sendMessage"
+    r = requests.post(url, data=payload, timeout=20)
+    data = r.json() if r.content else {}
+    if not (r.ok and data.get("ok")):
+        # Inline markup can be rejected in some Business combinations. Retry
+        # plain text with official links rather than leave the customer unanswered.
+        fallback = (
+            html.unescape(text.replace("<b>", "").replace("</b>", ""))
+            + f"\n\nBetroxyBot: {biz51.BETROXY_PRODUCT_BOT}\nWebsite: {biz51.BETROXY_WEBSITE}"
+        )
+        payload.pop("reply_markup", None)
+        payload["text"] = fallback
+        payload.pop("parse_mode", None)
+        r = requests.post(url, data=payload, timeout=20)
+        data = r.json() if r.content else {}
+        text = fallback
+    if not (r.ok and data.get("ok")):
+        raise RuntimeError(str(data.get("description") or f"HTTP {r.status_code}"))
+
+    result = data.get("result") or {}
+    v49._mark_auto_ack(enquiry["id"])
+    v49._record_outbound(enquiry["id"], result.get("message_id"), text)
+    biz51._update_lead_state(enquiry["id"], intent=intent, stage=stage, auto_replied=True)
+    return result.get("message_id")
+
+
+def _backfill_recent_unanswered_customer():
+    """One-time recovery for the specific recent lead shown by the admin."""
+    time.sleep(8)
+    try:
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM telegram_business_enquiries
+                    WHERE auto_ack_sent_at IS NULL
+                      AND last_message_at >= NOW() - INTERVAL '24 hours'
+                      AND LOWER(COALESCE(last_message_text,'')) LIKE '%%found betroxy online%%'
+                    ORDER BY last_message_at DESC
+                    LIMIT 1
+                    """
+                )
+                enquiry = cur.fetchone()
+        if not enquiry:
+            bot.logger.warning("BUSINESS_DM_BACKFILL no_matching_unanswered_enquiry")
+            return
+        message_id = _direct_business_send(enquiry)
+        bot.logger.warning(
+            "BUSINESS_DM_BACKFILL sent=on enquiry_id=%s chat_id=%s message_id=%s",
+            enquiry["id"], enquiry["customer_chat_id"], message_id,
+        )
+    except Exception:
+        bot.logger.exception("BUSINESS_DM_BACKFILL_FAILED")
+
+
 def install():
     v49._business_message_update = business_message_update_with_menu_reply
+    threading.Thread(
+        target=_backfill_recent_unanswered_customer,
+        name="betroxy-business-dm-backfill",
+        daemon=True,
+    ).start()
     bot.logger.warning(
-        "BUSINESS_DM_REPLY_FIX active=on first_enquiry=always_reply explicit_start=reply explicit_greeting=reply cooldown=20s"
+        "BUSINESS_DM_REPLY_FIX active=on first_enquiry=always_reply explicit_start=reply explicit_greeting=reply cooldown=20s backfill=recent_matching_unanswered"
     )
     return business_message_update_with_menu_reply
