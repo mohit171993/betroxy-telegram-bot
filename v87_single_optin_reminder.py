@@ -3,6 +3,8 @@ import time
 
 import bot
 import v86_live_sports_autopilot as v86
+import daily_quiz_schedule as daily_schedule
+import engagement_strategy_v2
 
 v83 = v86.v83
 v85 = v86.v85
@@ -49,13 +51,13 @@ def _send_single_optin_reminder(limit=12):
             rows = cur.fetchall()
 
     keyboard = [
-        [{"text": "🏆 Join Sports Challenge", "url": v83.PREFERENCES_DEEPLINK}],
+        [{"text": "🏆 Join Daily Quiz", "url": "https://t.me/BetroxyOfficialBot?start=dailyquiz"}],
         [{"text": "🔔 Choose My Updates", "url": v83.PREFERENCES_DEEPLINK}],
     ]
     text = (
-        "🏆 <b>Want to join the BETROXY Sports Challenge?</b>\n\n"
-        "Choose only the updates you want — Sports, Promotions or Quiz & Rewards. "
-        "Quiz participants can earn points and appear on the weekly leaderboard.\n\n"
+        "🏆 <b>Want BETROXY quiz & reward updates?</b>\n\n"
+        "The Daily Quiz has a <b>₹1,000 prize pool</b> — ₹500 / ₹300 / ₹200 — "
+        "and is free to participate. Choose only the updates you want: Sports, Promotions or Quiz & Rewards.\n\n"
         "No selection means no recurring updates, and you can stop anytime."
     )
 
@@ -65,7 +67,7 @@ def _send_single_optin_reminder(limit=12):
             sent += 1
         time.sleep(0.08)
     if sent:
-        bot.logger.warning("V87_OPTIN_REMINDER sent=%s", sent)
+        bot.logger.warning("V87_OPTIN_REMINDER sent=%s daily_quiz_focus=on", sent)
     return sent
 
 
@@ -84,8 +86,13 @@ def _v87_worker_cycle(force=False):
 
 v83._worker_cycle = _v87_worker_cycle
 
+# Production engagement policy: channel carries frequent activity, while private
+# proactive outreach is capped at one per user per IST day. This also retires the
+# legacy points-based Sports Challenge in favor of the real ₹1,000 Daily Quiz.
+engagement_strategy_v2.install(v83, daily_schedule)
+
 bot.logger.warning(
-    "V87_SINGLE_OPTIN_REMINDER active=on delay=3d max_reminders=1 consent_required_after_reminder=on"
+    "V87_SINGLE_OPTIN_REMINDER active=on delay=3d max_reminders=1 consent_required_after_reminder=on daily_quiz_focus=on"
 )
 
 
