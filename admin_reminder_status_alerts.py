@@ -11,6 +11,7 @@ import time
 import bot
 import channel_subscription_cta
 import channel_membership_tracker
+import daily_quiz_reward_admin_repeat_alerts
 
 HEARTBEAT_SECONDS = 15 * 60
 PROGRESS_EVERY_USERS = 5
@@ -142,6 +143,12 @@ def install(quiz_alerts):
     # channel. This is a once-daily getChatMember audit and sends no customer DM.
     channel_membership_tracker.install(quiz_alerts._admin_notice)
 
+    # daily_quiz_admin_rewards is installed later in production.py. Start a small
+    # late installer now; once that approval flow is ready it makes the 21:05 alert
+    # prominent and adds fresh 21:20 / 21:35 IST admin-only reminders that stop
+    # automatically after approval. Customer delivery is untouched.
+    daily_quiz_reward_admin_repeat_alerts.install_when_ready()
+
     # Existing queue progress messages now arrive after every five processed users
     # instead of every twenty. This changes reporting only, never customer pacing.
     quiz_alerts.PROGRESS_EVERY = PROGRESS_EVERY_USERS
@@ -154,6 +161,6 @@ def install(quiz_alerts):
     _installed = True
     bot.logger.warning(
         "ADMIN_REMINDER_STATUS_ALERTS active=on heartbeat=15m progress_every=5 "
-        "channel_subscription_cta=on channel_conversion_tracking=on "
+        "channel_subscription_cta=on channel_conversion_tracking=on payout_repeat_alerts=21:05/21:20/21:35_IST "
         "updates_channel=@betroxyupdates customer_pacing_unchanged=on account_priority=on"
     )
