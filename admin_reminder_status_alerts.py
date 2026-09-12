@@ -10,6 +10,7 @@ import time
 
 import bot
 import channel_subscription_cta
+import channel_membership_tracker
 
 HEARTBEAT_SECONDS = 15 * 60
 PROGRESS_EVERY_USERS = 5
@@ -56,6 +57,24 @@ def _delivery_counts(message_key):
     return counts
 
 
+def _channel_conversion_text():
+    """Use persisted audit data only; never call Telegram from the 15m heartbeat."""
+    try:
+        snap = channel_membership_tracker.snapshot()
+        if not snap:
+            return ""
+        all_s = snap["all"]
+        return (
+            "\n\n📢 <b>Updates Channel Conversion</b>\n"
+            f"Joined @betroxyupdates: <b>{all_s['members']}/{all_s['total']}</b>\n"
+            f"Confirmed not joined: <b>{all_s['nonmembers']}</b> • "
+            f"Unknown: <b>{all_s['unknown']}</b>"
+        )
+    except Exception:
+        bot.logger.exception("ADMIN_REMINDER_CHANNEL_SNAPSHOT_FAILED")
+        return ""
+
+
 def _send_snapshot(target_day, source):
     state = _quiz_alerts._queue_items(target_day)
     items = list(state.get("items") or [])
@@ -81,7 +100,8 @@ def _send_snapshot(target_day, source):
         f"⏳ Business DM pending: <b>{business_pending}</b>\n"
         f"🔁 Currently sending/recovering: <b>{persisted['sending']}</b>\n"
         f"⚠️ Failed records awaiting recovery/check: <b>{persisted['failed']}</b>\n"
-        f"📦 Total remaining now: <b>{len(items)}</b>\n\n"
+        f"📦 Total remaining now: <b>{len(items)}</b>"
+        f"{_channel_conversion_text()}\n\n"
         "🛡 Account-safety pacing is unchanged: Bot ≥60s, Business ≥10m, "
         "Telegram RetryAfter is always respected."
     )
@@ -113,6 +133,15 @@ def install(quiz_alerts):
     # eligibility, cooldown or dedupe policy.
     channel_subscription_cta.install(quiz_alerts)
 
+    # Keep every Updates menu destination aligned with the production channel.
+    # clean_customer_menu resolves bot.UPDATES_URL at callback time, so this late
+    # authority update also fixes the existing Updates & Promotions channel button.
+    bot.UPDATES_URL = channel_subscription_cta.CHANNEL_URL
+
+    # Slowly measure which known Bot/Business users have actually joined the
+    # channel. This is a once-daily getChatMember audit and sends no customer DM.
+    channel_membership_tracker.install(quiz_alerts._admin_notice)
+
     # Existing queue progress messages now arrive after every five processed users
     # instead of every twenty. This changes reporting only, never customer pacing.
     quiz_alerts.PROGRESS_EVERY = PROGRESS_EVERY_USERS
@@ -125,5 +154,6 @@ def install(quiz_alerts):
     _installed = True
     bot.logger.warning(
         "ADMIN_REMINDER_STATUS_ALERTS active=on heartbeat=15m progress_every=5 "
-        "channel_subscription_cta=on customer_pacing_unchanged=on account_priority=on"
+        "channel_subscription_cta=on channel_conversion_tracking=on "
+        "updates_channel=@betroxyupdates customer_pacing_unchanged=on account_priority=on"
     )
