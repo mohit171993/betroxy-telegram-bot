@@ -5,6 +5,7 @@ Production policy:
 - OfficialBot users only
 - no automated Telegram Business DMs
 - no 4 PM or 7 PM DM reminder campaigns
+- all other proactive engagement/reminder automation is disabled
 - sends are staggered very slowly through safe_reminder_delivery
 - campaign can resume after a restart without duplicating delivered messages
 - admin receives a start/resume report and a completion/partial report
@@ -32,6 +33,20 @@ v83.TZ_OFFSET = INDIA_OFFSET_HOURS
 # enforces >=60 seconds between automated OfficialBot DMs and hard-blocks
 # automated Telegram Business DMs.
 safe_delivery.install(v83)
+
+
+def _disabled_engagement_worker():
+    """Keep the legacy worker thread harmlessly idle in production safety mode."""
+    bot.logger.warning(
+        "PROACTIVE_ENGAGEMENT_WORKER disabled=on optin=OFF reminders=OFF sports=OFF promotions=OFF reactivation=OFF business_followup=OFF account_priority=on"
+    )
+    while True:
+        time.sleep(3600)
+
+
+# production.py starts v83._worker_loop later. Replace it here, before that
+# thread is created, so no legacy proactive automation can DM users.
+v83._worker_loop = _disabled_engagement_worker
 
 
 def _local_now():
@@ -64,7 +79,7 @@ def _sent_ids(message_key):
                 FROM engagement_log
                 WHERE message_key=%s AND status='sent'
             """, (str(message_key),))
-            return {int(r["telegram_user_id"]) for r in cur.fetchall()}
+            return {int(r["telegram_user_id"]) for r in cur.fetchall()]
 
 
 def _send_official(uid, message_key, text):
@@ -162,7 +177,8 @@ def _dispatch_daily():
         f"Estimated remaining time: <b>~{estimated_minutes} minutes</b>\n\n"
         "Direct Business DM: <b>OFF</b>\n"
         "4 PM reminder: <b>OFF</b>\n"
-        "7 PM reminder: <b>OFF</b>\n\n"
+        "7 PM reminder: <b>OFF</b>\n"
+        "Other proactive reminders/promotions: <b>OFF</b>\n\n"
         "Account protection has priority. Telegram RetryAfter will pause the queue automatically."
     )
 
