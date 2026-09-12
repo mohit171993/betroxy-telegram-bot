@@ -1,9 +1,13 @@
-"""Shared safe delivery layer for automated BETROXY Telegram messages.
+"""Shared safety layer for automated BETROXY Telegram messages.
 
-This module deliberately affects automated/background sends that go through
-v83._tg_send / v83._send_claimed. Interactive replies keep their existing
-handlers, while reminders, quiz alerts, sports/promotions and reactivation
-messages share one conservative queue.
+Production safety policy:
+- automated OfficialBot DMs are deliberately slow (default one per minute)
+- automated Telegram Business DMs are disabled entirely
+- Telegram RetryAfter pauses the queue and adds a safety cushion
+- failed jobs can resume without duplicating messages already delivered
+
+Interactive/user-triggered replies keep their existing handlers and are not
+blocked by this background-automation policy.
 """
 import os
 import random
@@ -13,10 +17,14 @@ import time
 
 import bot
 
-OFFICIAL_MIN_INTERVAL = max(1.0, float(os.getenv("BETROXY_DM_INTERVAL_SECONDS", "2.5")))
-BUSINESS_MIN_INTERVAL = max(2.0, float(os.getenv("BETROXY_BUSINESS_DM_INTERVAL_SECONDS", "8.0")))
-MAX_ATTEMPTS = max(2, min(5, int(os.getenv("BETROXY_DM_MAX_ATTEMPTS", "4"))))
+# Account-safety-first defaults. Railway variables can make delivery slower, but
+# never faster than these minimums.
+OFFICIAL_MIN_INTERVAL = max(60.0, float(os.getenv("BETROXY_DM_INTERVAL_SECONDS", "60")))
+BUSINESS_MIN_INTERVAL = max(60.0, float(os.getenv("BETROXY_BUSINESS_DM_INTERVAL_SECONDS", "60")))
+BUSINESS_AUTOMATION_ENABLED = False
+MAX_ATTEMPTS = max(2, min(3, int(os.getenv("BETROXY_DM_MAX_ATTEMPTS", "2"))))
 STALE_SENDING_MINUTES = max(5, int(os.getenv("BETROXY_DM_STALE_MINUTES", "15")))
+RATE_LIMIT_SAFETY_CUSHION = max(120, int(os.getenv("BETROXY_RATE_LIMIT_SAFETY_CUSHION", "120")))
 
 _rate_lock = threading.Lock()
 _last_attempt_at = 0.0
@@ -78,15 +86,23 @@ def _paced_send(chat_id, text, keyboard=None, business_connection_id=None):
         raise RuntimeError("safe_reminder_delivery is not installed")
 
     business = bool(business_connection_id)
+    if business and not BUSINESS_AUTOMATION_ENABLED:
+        bot.logger.warning("SAFE_DM_BUSINESS_AUTOMATION_BLOCKED chat=%s", chat_id)
+        return False, {
+            "ok": False,
+            "error_code": 0,
+            "description": "automated Telegram Business DM disabled by production safety policy",
+        }, 0
+
     interval = BUSINESS_MIN_INTERVAL if business else OFFICIAL_MIN_INTERVAL
     attempts_used = 0
 
-    # One lock for every automated route. A Telegram RetryAfter pauses the whole
-    # automation queue instead of letting other worker threads continue flooding.
+    # One global lock means a Telegram rate-limit response pauses every automated
+    # sender instead of allowing another worker to keep transmitting.
     with _rate_lock:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             attempts_used = attempt
-            wait = (_last_attempt_at + interval + random.uniform(0.15, 0.65)) - time.monotonic()
+            wait = (_last_attempt_at + interval + random.uniform(1.0, 5.0)) - time.monotonic()
             if wait > 0:
                 time.sleep(wait)
 
@@ -103,11 +119,12 @@ def _paced_send(chat_id, text, keyboard=None, business_connection_id=None):
             retry_after = _retry_after_seconds(data)
             if retry_after is not None:
                 if attempt < MAX_ATTEMPTS:
-                    pause = retry_after + 2 + random.uniform(0.25, 1.0)
+                    pause = retry_after + RATE_LIMIT_SAFETY_CUSHION + random.uniform(5.0, 20.0)
                     bot.logger.warning(
-                        "SAFE_DM_RATE_LIMIT route=%s retry_after=%ss attempt=%s/%s",
+                        "SAFE_DM_RATE_LIMIT route=%s retry_after=%ss safety_pause=%.0fs attempt=%s/%s",
                         "business" if business else "officialbot",
                         retry_after,
+                        pause,
                         attempt,
                         MAX_ATTEMPTS,
                     )
@@ -116,7 +133,7 @@ def _paced_send(chat_id, text, keyboard=None, business_connection_id=None):
                 return False, data, attempts_used - 1
 
             if _transient_failure(data) and attempt < MAX_ATTEMPTS:
-                pause = min(45.0, 4.0 * (2 ** (attempt - 1))) + random.uniform(0.25, 1.25)
+                pause = 30.0 + random.uniform(5.0, 15.0)
                 bot.logger.warning(
                     "SAFE_DM_TRANSIENT_RETRY route=%s wait=%.1fs attempt=%s/%s error=%s",
                     "business" if business else "officialbot",
@@ -226,6 +243,14 @@ def send_claimed_result(
     if v83 is None:
         raise RuntimeError("safe_reminder_delivery is not installed")
 
+    if business_connection_id and not BUSINESS_AUTOMATION_ENABLED:
+        return {
+            "sent": False,
+            "status": "business_automation_disabled",
+            "retried": 0,
+            "permanent": False,
+        }
+
     route = channel or ("business" if business_connection_id else "officialbot")
     job_id, claim_state = _claim_or_recover(v83, user_id, action, key, route, detail)
     if not job_id:
@@ -307,8 +332,8 @@ def install(v83):
     v83._safe_reminder_delivery_installed = True
 
     bot.logger.warning(
-        "SAFE_REMINDER_DELIVERY active=on official_interval=%.1fs business_interval=%.1fs max_attempts=%s global_queue=on retry_after=on failed_reclaim=on",
+        "SAFE_REMINDER_DELIVERY active=on official_interval=%.1fs business_automation=OFF max_attempts=%s retry_after_cushion=%ss failed_reclaim=on account_priority=on",
         OFFICIAL_MIN_INTERVAL,
-        BUSINESS_MIN_INTERVAL,
         MAX_ATTEMPTS,
+        RATE_LIMIT_SAFETY_CUSHION,
     )
