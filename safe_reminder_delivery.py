@@ -14,7 +14,7 @@ import time
 import bot
 
 OFFICIAL_MIN_INTERVAL = max(1.0, float(os.getenv("BETROXY_DM_INTERVAL_SECONDS", "2.5")))
-BUSINESS_MIN_INTERVAL = max(2.0, float(os.getenv("BETROXY_BUSINESS_DM_INTERVAL_SECONDS", "4.0")))
+BUSINESS_MIN_INTERVAL = max(2.0, float(os.getenv("BETROXY_BUSINESS_DM_INTERVAL_SECONDS", "8.0")))
 MAX_ATTEMPTS = max(2, min(5, int(os.getenv("BETROXY_DM_MAX_ATTEMPTS", "4"))))
 STALE_SENDING_MINUTES = max(5, int(os.getenv("BETROXY_DM_STALE_MINUTES", "15")))
 
