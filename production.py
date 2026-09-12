@@ -179,6 +179,12 @@ def main():
     compact_menu = importlib.import_module("clean_customer_menu")
     quiz_alerts = importlib.import_module("daily_quiz_alerts")
 
+    # Keep every historical Business DM classified, but only allow a recent,
+    # reply-capable Business-DM-only user one successful automated quiz reminder
+    # per rolling 7 days. OfficialBot remains the preferred route.
+    weekly_business_policy = importlib.import_module("business_weekly_reminder_policy")
+    weekly_business_policy.install(quiz_alerts)
+
     # Install the rotating V2 experience before result wrappers are captured.
     # In-progress campaigns are preserved for fairness; fresh campaigns use the
     # 280-question bank, IST weekday themes and 30-day repeat protection.
