@@ -9,6 +9,7 @@ import threading
 import time
 
 import bot
+import channel_subscription_cta
 
 HEARTBEAT_SECONDS = 15 * 60
 PROGRESS_EVERY_USERS = 5
@@ -107,6 +108,11 @@ def install(quiz_alerts):
         return
     _quiz_alerts = quiz_alerts
 
+    # Add a one-tap @betroxyupdates subscription CTA to both OfficialBot and the
+    # weekly Business reminder. This is conversion-only and changes no pacing,
+    # eligibility, cooldown or dedupe policy.
+    channel_subscription_cta.install(quiz_alerts)
+
     # Existing queue progress messages now arrive after every five processed users
     # instead of every twenty. This changes reporting only, never customer pacing.
     quiz_alerts.PROGRESS_EVERY = PROGRESS_EVERY_USERS
@@ -119,5 +125,5 @@ def install(quiz_alerts):
     _installed = True
     bot.logger.warning(
         "ADMIN_REMINDER_STATUS_ALERTS active=on heartbeat=15m progress_every=5 "
-        "customer_pacing_unchanged=on account_priority=on"
+        "channel_subscription_cta=on customer_pacing_unchanged=on account_priority=on"
     )
