@@ -13,7 +13,12 @@ REMINDER_KEY = "optin_reminder_1"
 
 
 def _send_single_optin_reminder(limit=12):
-    """Send one gentle preference reminder 3+ days after an ignored first invite."""
+    """Send one gentle preference reminder 3+ days after an ignored first invite.
+
+    Successful/in-flight reminders stay one-time only. A previously failed
+    delivery is selectable again so the shared safe delivery layer can reclaim
+    the same engagement_log job and retry it without creating a duplicate.
+    """
     with bot.get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -40,6 +45,7 @@ def _send_single_optin_reminder(limit=12):
                       SELECT 1 FROM engagement_log e2
                       WHERE e2.telegram_user_id=l.telegram_user_id
                         AND e2.message_key=%s
+                        AND e2.status IN ('sent','sending')
                   )
                 ORDER BY l.last_seen_at DESC
                 LIMIT %s
@@ -63,9 +69,11 @@ def _send_single_optin_reminder(limit=12):
     for lead in rows:
         if v83._send_claimed(int(lead["telegram_user_id"]), "optin", REMINDER_KEY, text, keyboard):
             sent += 1
-        time.sleep(0.08)
+        # The shared safe-delivery layer performs the real pacing. Keep this tiny
+        # yield only so this worker never spins tightly if delivery is skipped.
+        time.sleep(0.05)
     if sent:
-        bot.logger.warning("V87_OPTIN_REMINDER sent=%s daily_quiz_focus=on", sent)
+        bot.logger.warning("V87_OPTIN_REMINDER sent=%s daily_quiz_focus=on failed_recovery=on", sent)
     return sent
 
 
@@ -85,7 +93,7 @@ def _v87_worker_cycle(force=False):
 v83._worker_cycle = _v87_worker_cycle
 
 bot.logger.warning(
-    "V87_SINGLE_OPTIN_REMINDER active=on delay=3d max_reminders=1 consent_required_after_reminder=on daily_quiz_focus=on"
+    "V87_SINGLE_OPTIN_REMINDER active=on delay=3d max_reminders=1 consent_required_after_reminder=on daily_quiz_focus=on failed_recovery=on"
 )
 
 
