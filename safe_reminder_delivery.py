@@ -2,7 +2,8 @@
 
 Production safety policy:
 - automated OfficialBot DMs are deliberately slow (default one per minute)
-- automated Telegram Business DMs are disabled entirely
+- automated Telegram Business DMs are blocked by default
+- the Daily Quiz worker may explicitly use a very-slow Business DM exception
 - Telegram RetryAfter pauses the queue and adds a safety cushion
 - failed jobs can resume without duplicating messages already delivered
 
@@ -17,17 +18,18 @@ import time
 
 import bot
 
-# Account-safety-first defaults. Railway variables can make delivery slower, but
-# never faster than these minimums.
+# Railway variables can make delivery slower, never faster than these minimums.
+GLOBAL_MIN_INTERVAL = max(60.0, float(os.getenv("BETROXY_GLOBAL_DM_INTERVAL_SECONDS", "60")))
 OFFICIAL_MIN_INTERVAL = max(60.0, float(os.getenv("BETROXY_DM_INTERVAL_SECONDS", "60")))
-BUSINESS_MIN_INTERVAL = max(60.0, float(os.getenv("BETROXY_BUSINESS_DM_INTERVAL_SECONDS", "60")))
+BUSINESS_MIN_INTERVAL = max(600.0, float(os.getenv("BETROXY_BUSINESS_DM_INTERVAL_SECONDS", "600")))
 BUSINESS_AUTOMATION_ENABLED = False
 MAX_ATTEMPTS = max(2, min(3, int(os.getenv("BETROXY_DM_MAX_ATTEMPTS", "2"))))
 STALE_SENDING_MINUTES = max(5, int(os.getenv("BETROXY_DM_STALE_MINUTES", "15")))
 RATE_LIMIT_SAFETY_CUSHION = max(120, int(os.getenv("BETROXY_RATE_LIMIT_SAFETY_CUSHION", "120")))
 
 _rate_lock = threading.Lock()
-_last_attempt_at = 0.0
+_last_global_attempt_at = 0.0
+_last_route_attempt_at = {"officialbot": 0.0, "business": 0.0}
 _installed_v83 = None
 _original_tg_send = None
 
@@ -79,30 +81,43 @@ def _transient_failure(data):
     return any(word in desc for word in transient_words)
 
 
-def _paced_send(chat_id, text, keyboard=None, business_connection_id=None):
-    """Serialize automated sends, respect RetryAfter, and retry temporary errors."""
-    global _last_attempt_at
+def _paced_send(
+    chat_id,
+    text,
+    keyboard=None,
+    business_connection_id=None,
+    *,
+    allow_business_automation=False,
+):
+    """Serialize automated sends and obey conservative per-route limits."""
+    global _last_global_attempt_at
     if _original_tg_send is None:
         raise RuntimeError("safe_reminder_delivery is not installed")
 
     business = bool(business_connection_id)
-    if business and not BUSINESS_AUTOMATION_ENABLED:
+    route = "business" if business else "officialbot"
+    if business and not (BUSINESS_AUTOMATION_ENABLED or allow_business_automation):
         bot.logger.warning("SAFE_DM_BUSINESS_AUTOMATION_BLOCKED chat=%s", chat_id)
         return False, {
             "ok": False,
             "error_code": 0,
             "description": "automated Telegram Business DM disabled by production safety policy",
-        }, 0
+        }, 0, False
 
-    interval = BUSINESS_MIN_INTERVAL if business else OFFICIAL_MIN_INTERVAL
+    route_interval = BUSINESS_MIN_INTERVAL if business else OFFICIAL_MIN_INTERVAL
     attempts_used = 0
+    saw_rate_limit = False
 
-    # One global lock means a Telegram rate-limit response pauses every automated
-    # sender instead of allowing another worker to keep transmitting.
+    # A single lock makes any RetryAfter pause every background sender. Separate
+    # route timestamps prevent OfficialBot traffic from starving the intentionally
+    # much slower Business-DM exception.
     with _rate_lock:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             attempts_used = attempt
-            wait = (_last_attempt_at + interval + random.uniform(1.0, 5.0)) - time.monotonic()
+            now = time.monotonic()
+            global_wait = (_last_global_attempt_at + GLOBAL_MIN_INTERVAL) - now
+            route_wait = (_last_route_attempt_at[route] + route_interval) - now
+            wait = max(global_wait, route_wait, 0.0) + random.uniform(2.0, 8.0)
             if wait > 0:
                 time.sleep(wait)
 
@@ -112,17 +127,20 @@ def _paced_send(chat_id, text, keyboard=None, business_connection_id=None):
                 keyboard,
                 business_connection_id=business_connection_id,
             )
-            _last_attempt_at = time.monotonic()
+            sent_at = time.monotonic()
+            _last_global_attempt_at = sent_at
+            _last_route_attempt_at[route] = sent_at
             if ok:
-                return True, data, attempts_used - 1
+                return True, data, attempts_used - 1, saw_rate_limit
 
             retry_after = _retry_after_seconds(data)
             if retry_after is not None:
+                saw_rate_limit = True
                 if attempt < MAX_ATTEMPTS:
-                    pause = retry_after + RATE_LIMIT_SAFETY_CUSHION + random.uniform(5.0, 20.0)
+                    pause = retry_after + RATE_LIMIT_SAFETY_CUSHION + random.uniform(15.0, 45.0)
                     bot.logger.warning(
                         "SAFE_DM_RATE_LIMIT route=%s retry_after=%ss safety_pause=%.0fs attempt=%s/%s",
-                        "business" if business else "officialbot",
+                        route,
                         retry_after,
                         pause,
                         attempt,
@@ -130,13 +148,13 @@ def _paced_send(chat_id, text, keyboard=None, business_connection_id=None):
                     )
                     time.sleep(pause)
                     continue
-                return False, data, attempts_used - 1
+                return False, data, attempts_used - 1, saw_rate_limit
 
             if _transient_failure(data) and attempt < MAX_ATTEMPTS:
-                pause = 30.0 + random.uniform(5.0, 15.0)
+                pause = 45.0 + random.uniform(10.0, 30.0)
                 bot.logger.warning(
                     "SAFE_DM_TRANSIENT_RETRY route=%s wait=%.1fs attempt=%s/%s error=%s",
-                    "business" if business else "officialbot",
+                    route,
                     pause,
                     attempt,
                     MAX_ATTEMPTS,
@@ -145,9 +163,9 @@ def _paced_send(chat_id, text, keyboard=None, business_connection_id=None):
                 time.sleep(pause)
                 continue
 
-            return False, data, attempts_used - 1
+            return False, data, attempts_used - 1, saw_rate_limit
 
-    return False, {"description": "safe delivery exhausted"}, attempts_used - 1
+    return False, {"description": "safe delivery exhausted"}, attempts_used - 1, saw_rate_limit
 
 
 def _claim_or_recover(v83, user_id, action, key, channel="officialbot", detail=""):
@@ -183,7 +201,13 @@ def _claim_or_recover(v83, user_id, action, key, channel="officialbot", detail="
                     WHERE id=%s
                     RETURNING id
                     """,
-                    (str(channel), str(action), str(key), ("retrying failed delivery; " + str(detail))[:2000], int(row["id"])),
+                    (
+                        str(channel),
+                        str(action),
+                        str(key),
+                        ("retrying failed delivery; " + str(detail))[:2000],
+                        int(row["id"]),
+                    ),
                 )
                 claimed = cur.fetchone()
                 conn.commit()
@@ -237,18 +261,20 @@ def send_claimed_result(
     business_connection_id=None,
     channel=None,
     detail="",
+    allow_business_automation=False,
 ):
     """Send one deduplicated automated message and return structured outcome."""
     v83 = _installed_v83
     if v83 is None:
         raise RuntimeError("safe_reminder_delivery is not installed")
 
-    if business_connection_id and not BUSINESS_AUTOMATION_ENABLED:
+    if business_connection_id and not (BUSINESS_AUTOMATION_ENABLED or allow_business_automation):
         return {
             "sent": False,
             "status": "business_automation_disabled",
             "retried": 0,
             "permanent": False,
+            "rate_limited": False,
         }
 
     route = channel or ("business" if business_connection_id else "officialbot")
@@ -259,14 +285,16 @@ def send_claimed_result(
             "status": claim_state,
             "retried": 0,
             "permanent": False,
+            "rate_limited": False,
         }
 
     target_chat = int(chat_id if chat_id is not None else user_id)
-    ok, data, retried = _paced_send(
+    ok, data, retried, rate_limited = _paced_send(
         target_chat,
         text,
         keyboard,
         business_connection_id=business_connection_id,
+        allow_business_automation=allow_business_automation,
     )
     v83._finish_job(job_id, ok, data)
 
@@ -286,6 +314,7 @@ def send_claimed_result(
             "status": "sent",
             "retried": int(retried),
             "permanent": False,
+            "rate_limited": bool(rate_limited),
         }
 
     permanent = _permanent_unreachable(data)
@@ -296,6 +325,7 @@ def send_claimed_result(
         "status": "failed",
         "retried": int(retried),
         "permanent": bool(permanent),
+        "rate_limited": bool(rate_limited),
         "error": _description(data)[:300],
     }
 
@@ -321,19 +351,27 @@ def install(v83):
 
     _installed_v83 = v83
     _original_tg_send = v83._tg_send
+
+    # Generic v83 automation never receives the Business exception flag, so all
+    # legacy Business background sends remain blocked.
     v83._tg_send = lambda chat_id, text, keyboard=None, business_connection_id=None: _paced_send(
         chat_id,
         text,
         keyboard,
         business_connection_id=business_connection_id,
+        allow_business_automation=False,
     )[:2]
     v83._send_claimed = _safe_send_claimed
     v83._safe_delivery_send_claimed_result = send_claimed_result
     v83._safe_reminder_delivery_installed = True
 
     bot.logger.warning(
-        "SAFE_REMINDER_DELIVERY active=on official_interval=%.1fs business_automation=OFF max_attempts=%s retry_after_cushion=%ss failed_reclaim=on account_priority=on",
+        "SAFE_REMINDER_DELIVERY active=on global_interval=%.0fs official_interval=%.0fs "
+        "business_default=OFF business_daily_quiz_exception=explicit_only business_interval=%.0fs "
+        "max_attempts=%s retry_after_cushion=%ss failed_reclaim=on account_priority=on",
+        GLOBAL_MIN_INTERVAL,
         OFFICIAL_MIN_INTERVAL,
+        BUSINESS_MIN_INTERVAL,
         MAX_ATTEMPTS,
         RATE_LIMIT_SAFETY_CUSHION,
     )
