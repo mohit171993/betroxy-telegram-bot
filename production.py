@@ -185,6 +185,10 @@ def main():
     weekly_business_policy = importlib.import_module("business_weekly_reminder_policy")
     weekly_business_policy.install(quiz_alerts)
 
+    # Public channel posts run on their own lightweight worker so the very slow
+    # private-DM queues can never delay 10:00/16:00/19:00 channel announcements.
+    public_channel_schedule = importlib.import_module("public_quiz_channel_schedule")
+
     # Install the rotating V2 experience before result wrappers are captured.
     # In-progress campaigns are preserved for fairness; fresh campaigns use the
     # 280-question bank, IST weekday themes and 30-day repeat protection.
@@ -239,10 +243,12 @@ def main():
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
+    threading.Thread(target=public_channel_schedule.channel_worker, name="betroxy-public-channel-schedule", daemon=True).start()
     bot.logger.warning(
         "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off leaderboard_image=off "
         "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
-        "quiz_alerts=10:00/16:00/19:00_IST quiz_rotation=v2 bank=280 theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
+        "quiz_alerts=10:00/16:00/19:00_IST public_channel_posts=10:00/16:00/19:00+21:05_result "
+        "quiz_rotation=v2 bank=280 theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
         "quiz_answer_reactions=on quiz_q4_progress=on quiz_top3_result=on quiz_badges=on quiz_streaks=on quiz_completion_timeline=on "
         "customer_menu=start_and_business_same6 business_greeting_reply=on daily_quiz_admin_rewards=on "
         "reward_code_display_fix=on fixed_channel_test=private_only legacy_image_quiz=off test_probe=off public_image_worker=off "
