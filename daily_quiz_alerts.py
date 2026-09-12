@@ -79,7 +79,7 @@ def _sent_ids(message_key):
                 FROM engagement_log
                 WHERE message_key=%s AND status='sent'
             """, (str(message_key),))
-            return {int(r["telegram_user_id"]) for r in cur.fetchall()]
+            return {int(r["telegram_user_id"]) for r in cur.fetchall()}
 
 
 def _send_official(uid, message_key, text):
