@@ -32,6 +32,15 @@ def install(weekly_mega, quiz_alerts):
     if _installed:
         return
 
+    # Cover every current menu renderer, including the dynamic approved-banner
+    # /start path, without changing or replacing any of the old menu actions.
+    try:
+        import clean_customer_menu as compact_menu
+        import weekly_mega_menu_overlay
+        weekly_mega_menu_overlay.install(weekly_mega, compact_menu)
+    except Exception:
+        bot.logger.exception("MEGA_MENU_OVERLAY_INSTALL_FAILED")
+
     _original_message_for = quiz_alerts._message_for
     _original_quiz_button = quiz_alerts._quiz_button
 
