@@ -5,17 +5,13 @@ or patch the locked Daily Quiz code, Daily Quiz banners, Daily Quiz schedule,
 private reminder eligibility, or the 12/09 Closing branch.
 
 Final weekly channel cadence (IST):
-- Wednesday 19:30: text teaser
-- Friday 19:30: text prize reminder
+- Wednesday 19:30: approved midweek teaser banner, text fallback
+- Friday 19:30: approved 2-days-to-go banner, text fallback
 - Saturday 19:30: approved Mega preview banner
 - Sunday 10:05: approved Mega open banner
 - Sunday 16:05: approved Mega afternoon banner
 - Sunday 19:05: approved Mega last-chance banner
 - Sunday 21:10: approved Mega results banner
-
-Wednesday/Friday are intentionally text-only because the approved five-image
-set contains a Saturday "Tomorrow" creative and four Sunday event creatives.
-This prevents a misleading "Tomorrow" image from being reused mid-week.
 """
 from __future__ import annotations
 
@@ -37,6 +33,7 @@ SUNDAY_RESULT_AT = dtime(21, 10)
 _installed = False
 _weekly = None
 _media = None
+_midweek = None
 
 
 def _rows():
@@ -75,22 +72,38 @@ def _text_channel_post(campaign, delivery_type, text):
     return bool(ok)
 
 
+def _midweek_channel_post(campaign, delivery_type, asset_key, text):
+    if _midweek is not None:
+        return _midweek.channel_post(campaign, delivery_type, asset_key, text, _rows())
+    return _text_channel_post(campaign, delivery_type, text)
+
+
 def _run_weekly_channel_cycle(local, campaign):
     day = campaign["campaign_date"]
     local_day = local.date()
     local_time = local.time().replace(tzinfo=None)
 
-    # Wednesday: four days before Sunday.
+    # Wednesday: four days before Sunday. Approved image when available.
     if local_day == day - timedelta(days=4) and local_time >= WEDNESDAY_TEASER_AT:
-        _text_channel_post(campaign, "midweek_teaser", _midweek_text("midweek_teaser", campaign))
+        _midweek_channel_post(
+            campaign,
+            "midweek_teaser",
+            "mega_wednesday",
+            _midweek_text("midweek_teaser", campaign),
+        )
         return
 
-    # Friday: two days before Sunday.
+    # Friday: two days before Sunday. Approved image when available.
     if local_day == day - timedelta(days=2) and local_time >= FRIDAY_REMINDER_AT:
-        _text_channel_post(campaign, "friday_reminder", _midweek_text("friday_reminder", campaign))
+        _midweek_channel_post(
+            campaign,
+            "friday_reminder",
+            "mega_friday",
+            _midweek_text("friday_reminder", campaign),
+        )
         return
 
-    # Saturday: reuse the approved dedicated "Tomorrow" preview banner.
+    # Saturday: approved dedicated "Tomorrow" preview banner.
     if local_day == day - timedelta(days=1) and local_time >= SATURDAY_PREVIEW_AT:
         _weekly._channel_post(campaign, "preview", _weekly._promo_text("preview", campaign))
         return
@@ -112,7 +125,7 @@ def worker():
     bot.logger.warning(
         "MEGA_CHANNEL_SCHEDULE_WORKER start wed=19:30 fri=19:30 sat=19:30 "
         "sun=10:05/16:05/19:05 result=21:10_IST "
-        "wed_fri=text_only approved_mega_banners=sat+sun daily_quiz_untouched=on"
+        "wed_fri=banner_if_approved+text_fallback approved_mega_banners=sat+sun daily_quiz_untouched=on"
     )
     while True:
         try:
@@ -147,11 +160,20 @@ def worker():
 
 
 def install(weekly_module, media_module):
-    global _installed, _weekly, _media
+    global _installed, _weekly, _media, _midweek
     _weekly = weekly_module
     _media = media_module
     if _installed:
         return
+
+    # Add two explicitly assigned midweek media slots. This is weekly-only and
+    # leaves the existing 5 weekly banners and all Daily Quiz assets untouched.
+    try:
+        _midweek = __import__("weekly_mega_midweek_banners")
+        _midweek.install(_weekly, _media)
+    except Exception:
+        _midweek = None
+        bot.logger.exception("MEGA_MIDWEEK_BANNERS_INSTALL_FAILED")
 
     # production.py starts weekly_module.worker later; replacing this attribute is
     # isolated to the new weekly feature and leaves all Daily Quiz workers intact.
@@ -160,9 +182,9 @@ def install(weekly_module, media_module):
     _installed = True
 
     bot.logger.warning(
-        "MEGA_CHANNEL_SCHEDULE active=on wed=19:30_text fri=19:30_text "
+        "MEGA_CHANNEL_SCHEDULE active=on wed=19:30_banner_if_approved fri=19:30_banner_if_approved "
         "sat=19:30_preview_banner sun_open=10:05 sun_afternoon=16:05 "
-        "sun_last=19:05 sun_result=21:10_IST daily_schedule=unchanged "
+        "sun_last=19:05 sun_result=21:10_IST midweek_text_fallback=on daily_schedule=unchanged "
         "daily_banners=unchanged private_dm=unchanged"
     )
 
