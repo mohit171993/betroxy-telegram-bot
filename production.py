@@ -255,6 +255,11 @@ def main():
     weekly_mega.install()
     weekly_mega_additions.install(weekly_mega, compact_menu)
 
+    # Weekly-only bulk banner uploader. This adds a 5-photo album workflow to
+    # /mega_banners and never references the locked Daily Quiz banner tables.
+    weekly_mega_bulk = importlib.import_module("weekly_mega_bulk_upload")
+    weekly_mega_bulk.install(weekly_mega_additions)
+
     # Reuse the already-approved private reminder queues for Sunday promotion.
     # This adds Mega Quiz text/button only; it does not add any extra customer DM,
     # alter OfficialBot pacing, or bypass the rolling 7-day Business policy.
@@ -273,7 +278,7 @@ def main():
         "admin_reminder_status=15m+every5 "
         "quiz_rotation=v2 bank=280 theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
         "quiz_answer_reactions=on quiz_q4_progress=on quiz_top3_result=on quiz_badges=on quiz_streaks=on quiz_completion_timeline=on "
-        "weekly_mega=on mega_prize=5000 mega_questions=10 mega_result=21:10_IST mega_manual_rewards=on "
+        "weekly_mega=on mega_prize=5000 mega_questions=10 mega_result=21:10_IST mega_manual_rewards=on mega_bulk_banners=5_album "
         "customer_menu=start_and_business_same6 business_greeting_reply=on daily_quiz_admin_rewards=on "
         "reward_code_display_fix=on fixed_channel_test=private_only legacy_image_quiz=off test_probe=off public_image_worker=off "
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
