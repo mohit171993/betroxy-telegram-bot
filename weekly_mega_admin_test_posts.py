@@ -10,7 +10,7 @@ import time
 
 import bot
 
-TEST_BATCH_KEY = "weekly_mega_channel_preview_2026_09_13_v1"
+TEST_BATCH_KEY = "weekly_mega_channel_preview_2026_09_13_v2"
 
 
 def _ensure_schema():
