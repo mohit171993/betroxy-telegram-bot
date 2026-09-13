@@ -255,6 +255,12 @@ def main():
     weekly_mega.install()
     weekly_mega_additions.install(weekly_mega, compact_menu)
 
+    # Reuse the already-approved private reminder queues for Sunday promotion.
+    # This adds Mega Quiz text/button only; it does not add any extra customer DM,
+    # alter OfficialBot pacing, or bypass the rolling 7-day Business policy.
+    weekly_mega_reminder = importlib.import_module("weekly_mega_reminder_overlay")
+    weekly_mega_reminder.install(weekly_mega, quiz_alerts)
+
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
