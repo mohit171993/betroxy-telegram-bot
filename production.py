@@ -272,6 +272,12 @@ def main():
     weekly_mega_channel_schedule = importlib.import_module("weekly_mega_channel_schedule")
     weekly_mega_channel_schedule.install(weekly_mega, weekly_mega_additions)
 
+    # Daily Quiz participation is allowed only during the advertised IST window.
+    # This is an additive runtime guard installed after all menu/deeplink layers,
+    # so the locked Daily Quiz implementation remains unchanged.
+    daily_opening_guard = importlib.import_module("daily_quiz_opening_guard")
+    daily_opening_guard.install(v110, quiz, compact_menu)
+
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
@@ -281,6 +287,7 @@ def main():
         "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off leaderboard_image=off "
         "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
         "quiz_alerts=10:00/16:00/19:00_IST public_channel_posts=10:00/16:00/19:00+21:05_result "
+        "daily_quiz_window=10:00-21:00_IST opening_guard=on "
         "admin_reminder_status=15m+every5 "
         "quiz_rotation=v2 bank=280 theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
         "quiz_answer_reactions=on quiz_q4_progress=on quiz_top3_result=on quiz_badges=on quiz_streaks=on quiz_completion_timeline=on "
