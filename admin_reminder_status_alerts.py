@@ -12,6 +12,7 @@ import bot
 import channel_subscription_cta
 import channel_membership_tracker
 import daily_quiz_reward_admin_repeat_alerts
+import quiz_v21_upgrade
 
 HEARTBEAT_SECONDS = 15 * 60
 PROGRESS_EVERY_USERS = 5
@@ -129,6 +130,12 @@ def install(quiz_alerts):
         return
     _quiz_alerts = quiz_alerts
 
+    # Quiz V2.1 upgrades presentation and measurement only. It adds clearer
+    # provisional/final rank wording, a channel CTA on completion, preserves the
+    # existing weekday themes, and sends one admin-only funnel report after 21:10 IST.
+    # Core quiz rules, payout, ranking and customer messaging cadence are unchanged.
+    quiz_v21_upgrade.install()
+
     # Add a one-tap @betroxyupdates subscription CTA to both OfficialBot and the
     # weekly Business reminder. This is conversion-only and changes no pacing,
     # eligibility, cooldown or dedupe policy.
@@ -162,5 +169,5 @@ def install(quiz_alerts):
     bot.logger.warning(
         "ADMIN_REMINDER_STATUS_ALERTS active=on heartbeat=15m progress_every=5 "
         "channel_subscription_cta=on channel_conversion_tracking=on payout_repeat_alerts=21:05/21:20/21:35_IST "
-        "updates_channel=@betroxyupdates customer_pacing_unchanged=on account_priority=on"
+        "quiz_v21=on updates_channel=@betroxyupdates customer_pacing_unchanged=on account_priority=on"
     )
