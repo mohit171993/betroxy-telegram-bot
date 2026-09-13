@@ -245,10 +245,18 @@ def main():
     v104._startup_mobile_diagnostic()
     v88.v63.apply_signup_cta()
     v85._enable_smart_reply_without_reset()
+
+    # Sunday Mega Quiz is deliberately installed after the proven daily feature
+    # guard and after the GiftPort split/idempotency patch. It is a separate
+    # campaign and cannot alter daily quiz timing, prizes or payout approval.
+    weekly_mega = importlib.import_module("weekly_mega_quiz")
+    weekly_mega.install()
+
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
     threading.Thread(target=public_channel_schedule.channel_worker, name="betroxy-public-channel-schedule", daemon=True).start()
+    threading.Thread(target=weekly_mega.worker, name="betroxy-sunday-mega-quiz", daemon=True).start()
     bot.logger.warning(
         "BETROXY_PRODUCTION_BOOT permanent_entrypoint=on text_quiz=on result_image=off result_replay_image=off leaderboard_image=off "
         "daily_quiz_route=compact_daily_quiz timer=30s countdown=20/10/5 reminders=on optin_reminder=3d "
@@ -256,6 +264,7 @@ def main():
         "admin_reminder_status=15m+every5 "
         "quiz_rotation=v2 bank=280 theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
         "quiz_answer_reactions=on quiz_q4_progress=on quiz_top3_result=on quiz_badges=on quiz_streaks=on quiz_completion_timeline=on "
+        "weekly_mega=on mega_prize=5000 mega_questions=10 mega_result=21:10_IST mega_manual_rewards=on "
         "customer_menu=start_and_business_same6 business_greeting_reply=on daily_quiz_admin_rewards=on "
         "reward_code_display_fix=on fixed_channel_test=private_only legacy_image_quiz=off test_probe=off public_image_worker=off "
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
