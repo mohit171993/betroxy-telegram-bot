@@ -166,6 +166,16 @@ def install(weekly_module, media_module):
         "daily_banners=unchanged private_dm=unchanged"
     )
 
+    # Weekly-only recovery tool. Bulk Telegram albums preserve an order but do not
+    # semantically identify which image says Preview/Open/Last Chance/Results.
+    # This visual remap wizard lets the admin correct the five already-uploaded
+    # images without re-uploading anything or touching the Daily Quiz.
+    try:
+        remap = __import__("weekly_mega_banner_reassign")
+        remap.install(_media, __import__(__name__))
+    except Exception:
+        bot.logger.exception("MEGA_BANNER_REMAP_INSTALL_FAILED")
+
     # One-time private verification requested by the admin: send all seven final
     # channel-post previews to the admin bot chat. The helper has its own durable
     # per-slot dedupe and never writes real channel delivery markers.
