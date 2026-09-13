@@ -266,6 +266,12 @@ def main():
     weekly_mega_reminder = importlib.import_module("weekly_mega_reminder_overlay")
     weekly_mega_reminder.install(weekly_mega, quiz_alerts)
 
+    # Public channel only: add Wednesday/Friday buildup and stagger Sunday Mega
+    # posts five minutes after the locked Daily Quiz posts. Daily Quiz code,
+    # banners, schedules and private messaging remain untouched.
+    weekly_mega_channel_schedule = importlib.import_module("weekly_mega_channel_schedule")
+    weekly_mega_channel_schedule.install(weekly_mega, weekly_mega_additions)
+
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
@@ -279,6 +285,7 @@ def main():
         "quiz_rotation=v2 bank=280 theme_rotation=weekly no_repeat=30d mix=2easy/3medium/2hard "
         "quiz_answer_reactions=on quiz_q4_progress=on quiz_top3_result=on quiz_badges=on quiz_streaks=on quiz_completion_timeline=on "
         "weekly_mega=on mega_prize=5000 mega_questions=10 mega_result=21:10_IST mega_manual_rewards=on mega_bulk_banners=5_album "
+        "mega_channel_schedule=wed19:30/fri19:30/sat19:30/sun10:05/16:05/19:05+21:10_IST "
         "customer_menu=start_and_business_same6 business_greeting_reply=on daily_quiz_admin_rewards=on "
         "reward_code_display_fix=on fixed_channel_test=private_only legacy_image_quiz=off test_probe=off public_image_worker=off "
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
