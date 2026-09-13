@@ -19,6 +19,7 @@ This prevents a misleading "Tomorrow" image from being reused mid-week.
 """
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime, time as dtime, timedelta, timezone
 
@@ -164,3 +165,20 @@ def install(weekly_module, media_module):
         "sun_last=19:05 sun_result=21:10_IST daily_schedule=unchanged "
         "daily_banners=unchanged private_dm=unchanged"
     )
+
+    # One-time private verification requested by the admin: send all seven final
+    # channel-post previews to the admin bot chat. The helper has its own durable
+    # per-slot dedupe and never writes real channel delivery markers.
+    try:
+        preview = __import__("weekly_mega_admin_test_posts")
+        threading.Thread(
+            target=preview.send_all_once,
+            args=(_weekly, _media, __import__(__name__)),
+            name="mega-admin-test-posts",
+            daemon=True,
+        ).start()
+        bot.logger.warning(
+            "MEGA_ADMIN_TEST_POSTS armed=on target=admin_only total=7 public_channel=off daily_quiz=untouched"
+        )
+    except Exception:
+        bot.logger.exception("MEGA_ADMIN_TEST_POSTS_ARM_FAILED")
