@@ -250,7 +250,10 @@ def main():
     # guard and after the GiftPort split/idempotency patch. It is a separate
     # campaign and cannot alter daily quiz timing, prizes or payout approval.
     weekly_mega = importlib.import_module("weekly_mega_quiz")
+    weekly_mega_additions = importlib.import_module("weekly_mega_quiz_additions")
+    weekly_mega_additions.prepare(weekly_mega)
     weekly_mega.install()
+    weekly_mega_additions.install(weekly_mega, compact_menu)
 
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
