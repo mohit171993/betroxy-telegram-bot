@@ -169,8 +169,6 @@ def prepare(admin_rewards, bot):
                             campaign["id"], state,
                         )
                     except Exception as exc:
-                        # A previously-sent Telegram message may be too old/non-editable;
-                        # the newly generated screen is still corrected.
                         bot.logger.warning(
                             "DAILY_QUIZ_ADMIN_UI_EDIT_SKIPPED campaign=%s state=%s reason=%s",
                             campaign["id"], state, type(exc).__name__,
@@ -179,6 +177,9 @@ def prepare(admin_rewards, bot):
                 bot.logger.exception("DAILY_QUIZ_ADMIN_UI_POST_CALLBACK_FAILED")
             return result
 
+        # production.py's feature guard intentionally checks this historical
+        # callback name. Preserve it while still running the additive wrapper.
+        daily_quiz_reward_callback_ui_fixed.__name__ = "daily_quiz_reward_callback"
         bot.callback_handler = daily_quiz_reward_callback_ui_fixed
         bot.logger.warning(
             "DAILY_QUIZ_ADMIN_UI_FIX active=on delivered_hides_approval=on completed_status=on "
