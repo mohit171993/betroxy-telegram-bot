@@ -30,6 +30,16 @@ try:
 except Exception:
     production.bot.logger.exception("DAILY_QUIZ_ADMIN_UI_FIX_PREPARE_FAILED")
 
+# Daily Quiz mobile gate: require a Telegram-verified contact before entry while
+# accepting international numbers. This is quiz-only; provider/payment rules are
+# not changed here, and the locked V110 implementation remains untouched.
+try:
+    import quiz_mobile_verification_overlay as quiz_mobile_verification
+    quiz_mobile_verification.install(production.v110, production.bot)
+except Exception:
+    production.bot.logger.exception("QUIZ_MOBILE_VERIFICATION_OVERLAY_FAILED")
+    raise
+
 production.bot.logger.warning(
     "BETROXY_CHANNEL_AUTHORITY active=on channel=%s url=%s locked_production_unchanged=on",
     CORRECT_CHANNEL,
