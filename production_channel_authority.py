@@ -40,6 +40,16 @@ except Exception:
     production.bot.logger.exception("QUIZ_MOBILE_VERIFICATION_OVERLAY_FAILED")
     raise
 
+# Admin Checkout/WhatsApp number entry must take priority over the separate
+# India-only reward-mobile capture window. International checkout numbers remain
+# valid; reward-mobile rules stay unchanged.
+try:
+    import checkout_whatsapp_number_priority_fix as checkout_number_fix
+    checkout_number_fix.install(production.bot)
+except Exception:
+    production.bot.logger.exception("CHECKOUT_WHATSAPP_NUMBER_PRIORITY_FAILED")
+    raise
+
 production.bot.logger.warning(
     "BETROXY_CHANNEL_AUTHORITY active=on channel=%s url=%s locked_production_unchanged=on",
     CORRECT_CHANNEL,
