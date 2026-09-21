@@ -337,7 +337,16 @@ def install(v97, v89, v83):
         ok, data = v83._tg_send(
             int(award["telegram_user_id"]),
             text,
-            [[{"text": "🎁 My Rewards", "url": f"https://t.me/{v83.OFFICIAL_BOT}?start=rewards"}]],
+            [
+                [{
+                    "text": "✅ I Received My Voucher",
+                    "callback_data": f"reward_received:{int(award['id'])}",
+                }],
+                [{
+                    "text": "🎁 My Rewards",
+                    "url": f"https://t.me/{v83.OFFICIAL_BOT}?start=rewards",
+                }],
+            ],
         )
         if ok:
             message_id = ((data.get("result") or {}).get("message_id")) if isinstance(data, dict) else None
@@ -624,6 +633,7 @@ def install(v97, v89, v83):
 
     bot.logger.warning(
         "REWARD_CODE_DISPLAY_FIX active=on GPAPGV card_no=redeem_code redeem_code=reference "
-        "variable_value_validation=on split_fixed_denominations=on split_idempotency=on"
+        "variable_value_validation=on split_fixed_denominations=on split_idempotency=on "
+        "receipt_confirmation_button=on"
     )
     return _my_rewards_text, _deliver_award
