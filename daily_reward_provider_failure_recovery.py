@@ -167,6 +167,231 @@ def prepare(admin_rewards, bot):
         )
         return any(word in message for word in terminal_words)
 
+    def _split_rows(award_id):
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM reward_award_parts WHERE award_id=%s ORDER BY part_no",
+                    (int(award_id),),
+                )
+                return cur.fetchall()
+
+    def _ensure_fallback_parts(award, operator_code, plan):
+        award_id = int(award["id"])
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                for part_no, part_amount in enumerate(plan, 1):
+                    order_id = f"BTRX_{award_id}_P{part_no}"
+                    cur.execute(
+                        """
+                        INSERT INTO reward_award_parts(
+                            award_id,part_no,amount,operator_code,provider_order_id,status
+                        ) VALUES (%s,%s,%s,%s,%s,'queued')
+                        ON CONFLICT(award_id,part_no) DO NOTHING
+                        """,
+                        (award_id, part_no, int(part_amount), str(operator_code), order_id),
+                    )
+            conn.commit()
+        rows = _split_rows(award_id)
+        if [int(r.get("amount") or 0) for r in rows] != [int(x) for x in plan]:
+            return None
+        return rows
+
+    def _part_update(part_id, status, **fields):
+        allowed = {
+            "provider_transaction_id", "voucher_code", "card_no", "voucher_pin",
+            "voucher_url", "provider_message", "error_detail",
+        }
+        sets = ["status=%s", "updated_at=NOW()"]
+        params = [str(status)]
+        for key, value in fields.items():
+            if key in allowed:
+                sets.append(f"{key}=%s")
+                params.append(value)
+        if status in {"issued", "delivered"}:
+            sets.append("issued_at=COALESCE(issued_at,NOW())")
+        if status == "delivered":
+            sets.append("delivered_at=COALESCE(delivered_at,NOW())")
+        params.append(int(part_id))
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE reward_award_parts SET {', '.join(sets)} WHERE id=%s",
+                    tuple(params),
+                )
+            conn.commit()
+
+    def _mark_part_attempt(part):
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE reward_award_parts
+                    SET status='issuing', issue_attempts=issue_attempts+1,
+                        last_issue_attempt_at=NOW(), error_detail=NULL, updated_at=NOW()
+                    WHERE id=%s
+                    """,
+                    (int(part["id"]),),
+                )
+            conn.commit()
+
+    def _store_part_success(part, provider_data):
+        _part_update(
+            part["id"],
+            "issued",
+            provider_transaction_id=str(provider_data.get("transaction_id") or ""),
+            voucher_code=str(provider_data.get("redeem_code") or ""),
+            card_no=str(provider_data.get("card_no") or ""),
+            voucher_pin=str(provider_data.get("voucher_pin") or ""),
+            voucher_url=str(provider_data.get("voucher_url") or ""),
+            provider_message=str(provider_data.get("message") or ""),
+            error_detail=None,
+        )
+
+    def _issue_smaller_denomination_fallback(award, plan):
+        amount = int(award.get("amount") or 0)
+        if sum(plan) != amount:
+            return False, "Fallback denomination plan does not match the prize amount."
+
+        operator_code = str(award.get("brand_code") or "GPAPGV").upper()
+        product = v97._catalogue_row(operator_code) or {}
+        denoms = {int(float(x)) for x in v97._parse_denominations(product.get("denominations")) if float(x).is_integer()}
+        if not all(int(x) in denoms for x in plan):
+            return False, f"Required denominations {plan} are not available in the current GiftPort catalogue."
+
+        mobile = v97._giftport_mobile(int(award["telegram_user_id"]))
+        if not mobile:
+            v97._award_update(
+                award["id"], "waiting_mobile",
+                error_detail="User mobile not available for denomination fallback",
+            )
+            return False, "Winner mobile is not available."
+
+        parts = _ensure_fallback_parts(award, operator_code, plan)
+        if not parts:
+            v97._award_update(
+                award["id"], "needs_config",
+                error_detail="Stored fallback split plan does not match ₹200+₹200+₹100",
+            )
+            return False, "Stored fallback split plan does not match."
+
+        already_issued = sum(
+            int(p.get("amount") or 0)
+            for p in parts
+            if str(p.get("status") or "") in {"issued", "delivered"}
+        )
+        remaining = max(0, amount - already_issued)
+
+        if remaining:
+            bal_ok, balance, currency = v97._get_balance()
+            if not bal_ok:
+                v97._award_update(
+                    award["id"], "provider_hold",
+                    error_detail=str(currency or "Could not verify GiftPort balance"),
+                )
+                return False, str(currency or "Could not verify GiftPort balance")
+            settings = v97.v89._reward_settings()
+            reserve = int(settings.get("min_provider_balance") or 0)
+            if str(currency or "INR").upper() != "INR":
+                v97._award_update(
+                    award["id"], "provider_hold",
+                    error_detail=f"GiftPort wallet currency is {currency}, expected INR",
+                )
+                return False, f"GiftPort wallet currency is {currency}, expected INR"
+            if float(balance) - remaining < reserve:
+                msg = f"GiftPort balance ₹{balance:,.2f}; reserve ₹{reserve:,}"
+                v97._award_update(award["id"], "balance_hold", error_detail=msg)
+                return False, msg
+
+        v97._award_update(
+            award["id"], "issuing",
+            provider_order_id=f"SPLIT:{int(award['id'])}",
+            error_detail=None,
+        )
+        recipient_name = v97._recipient_name(int(award["telegram_user_id"]))
+
+        for part in _split_rows(award["id"]):
+            status = str(part.get("status") or "queued")
+            if status in {"issued", "delivered"}:
+                continue
+
+            # If a prior child attempt exists, never repurchase it blindly.
+            if int(part.get("issue_attempts") or 0) > 0:
+                child_order = str(part.get("provider_order_id") or "")
+                ok, status_data = v97._giftport_post("status", {"order_id": child_order})
+                if ok and _has_voucher(status_data):
+                    _store_part_success(part, status_data)
+                    continue
+                provider_status = str(status_data.get("status") or "").lower()
+                provider_message = str(status_data.get("message") or "").lower()
+                terminal = provider_status in {"failed","failure","rejected","declined","not_found","not found","cancelled","canceled"} or any(
+                    x in provider_message for x in ("failed","failure","rejected","declined","not found","no order","does not exist")
+                )
+                if not terminal:
+                    v97._award_update(
+                        award["id"], "provider_unknown",
+                        error_detail=f"Voucher part {part.get('part_no')} status is not safely retryable",
+                    )
+                    return False, f"Voucher part {part.get('part_no')} status is not safely retryable."
+                # Terminal child failures require another explicit admin recovery,
+                # not an automatic repeated purchase in this same action.
+                v97._award_update(
+                    award["id"], "provider_failed",
+                    error_detail=f"Voucher part {part.get('part_no')} previously failed; manual review required",
+                )
+                return False, f"Voucher part {part.get('part_no')} previously failed; manual review required."
+
+            _mark_part_attempt(part)
+            ok, buy_data = v97._giftport_post(
+                "buy",
+                {
+                    "order_id": str(part["provider_order_id"]),
+                    "operator_code": operator_code,
+                    "amount": int(part["amount"]),
+                    "mobile": mobile,
+                    "recipient_name": recipient_name,
+                },
+            )
+            if ok and _has_voucher(buy_data):
+                _store_part_success(part, buy_data)
+                bot.logger.warning(
+                    "DAILY_REWARD_SMALL_DENOM_PART_ISSUED award=%s part=%s amount=%s order=%s",
+                    award["id"], part["part_no"], part["amount"], part["provider_order_id"],
+                )
+                continue
+
+            message = str(buy_data.get("message") or buy_data.get("status") or "GiftPort split purchase failed")
+            if buy_data.get("network_error"):
+                child_status = parent_status = "provider_unknown"
+            elif "insufficient" in message.lower() and "balance" in message.lower():
+                child_status = parent_status = "balance_hold"
+            else:
+                child_status = parent_status = "provider_failed"
+            _part_update(part["id"], child_status, error_detail=message[:1000])
+            v97._award_update(
+                award["id"], parent_status,
+                provider_order_id=f"SPLIT:{int(award['id'])}",
+                error_detail=f"Voucher part {part.get('part_no')}: {message}"[:1000],
+            )
+            return False, f"Voucher part {part.get('part_no')}: {message}"
+
+        fresh = _split_rows(award["id"])
+        if not fresh or not all(str(p.get("status") or "") in {"issued", "delivered"} for p in fresh):
+            v97._award_update(
+                award["id"], "provider_unknown",
+                error_detail="Smaller-denomination voucher issuance incomplete",
+            )
+            return False, "Smaller-denomination voucher issuance incomplete."
+
+        v97._award_update(
+            award["id"], "issued",
+            provider_order_id=f"SPLIT:{int(award['id'])}",
+            provider_message="Fallback denominations: 200+200+100",
+            error_detail=None,
+        )
+        delivered = bool(v97._deliver_award(int(award["id"])))
+        return delivered, "Delivered" if delivered else "Issued; Telegram delivery pending"
+
     def install_with_recovery():
         base_handler = original_install()
 
@@ -176,6 +401,7 @@ def prepare(admin_rewards, bot):
             if not q or not (
                 data.startswith("dq_reward_reconcile:")
                 or data.startswith("dq_reward_retry:")
+                or data.startswith("dq_reward_split:")
             ):
                 return await base_handler(update, context)
 
@@ -253,8 +479,20 @@ def prepare(admin_rewards, bot):
                 return
 
             retry_allowed = _retry_allowed_from_status(ok, provider_data)
+            stored_failure = str(award.get("error_detail") or award.get("provider_message") or "").lower()
+            denomination_fallback = (
+                amount == 500
+                and "other denomination" in stored_failure
+            )
             kb = None
-            if retry_allowed:
+            if retry_allowed and denomination_fallback:
+                kb = bot.InlineKeyboardMarkup([[
+                    bot.InlineKeyboardButton(
+                        "🧩 Issue ₹500 as ₹200 + ₹200 + ₹100",
+                        callback_data=f"dq_reward_split:{campaign_id}:{rank}",
+                    )
+                ]])
+            elif retry_allowed:
                 kb = bot.InlineKeyboardMarkup([[
                     bot.InlineKeyboardButton(
                         f"♻️ Retry #{rank} ₹{amount} — Same Order ID",
@@ -267,8 +505,14 @@ def prepare(admin_rewards, bot):
                 f"Order: <code>{html.escape(order_id)}</code>\n"
                 f"GiftPort: <code>{html.escape(provider_message[:700])}</code>\n\n"
                 + (
-                    "You may explicitly retry using the <b>same deterministic order ID</b>. "
-                    "The bot will check status again immediately before purchase."
+                    (
+                        "The ₹500 denomination was rejected. You may explicitly issue the same ₹500 prize "
+                        "as <b>₹200 + ₹200 + ₹100</b>. Each child voucher uses its own deterministic order ID."
+                        if denomination_fallback
+                        else
+                        "You may explicitly retry using the <b>same deterministic order ID</b>. "
+                        "The bot will check status again immediately before purchase."
+                    )
                     if retry_allowed
                     else
                     "Retry remains blocked because the provider response is not clearly terminal."
@@ -281,6 +525,35 @@ def prepare(admin_rewards, bot):
                     "DAILY_REWARD_PROVIDER_CHECK admin=%s campaign=%s rank=%s award=%s amount=%s order=%s provider_ok=%s retry_allowed=%s message=%s",
                     q.from_user.id, campaign_id, rank, award["id"], amount, order_id,
                     ok, retry_allowed, provider_message[:300],
+                )
+                return
+
+            if data.startswith("dq_reward_split:"):
+                if not retry_allowed or not denomination_fallback:
+                    await q.message.reply_text(
+                        "⚠️ Smaller-denomination fallback is not currently authorized for this reward.",
+                        parse_mode=bot.ParseMode.HTML,
+                    )
+                    return
+                success, detail = _issue_smaller_denomination_fallback(award, [200, 200, 100])
+                await q.message.reply_text(
+                    (
+                        "✅ <b>₹500 reward recovered using smaller denominations.</b>\n\n"
+                        "Issued as: <b>₹200 + ₹200 + ₹100</b>\n"
+                        f"Result: <b>{html.escape(detail)}</b>"
+                    )
+                    if success
+                    else
+                    (
+                        "⚠️ <b>Smaller-denomination recovery did not fully complete.</b>\n\n"
+                        f"Detail: <code>{html.escape(str(detail)[:700])}</code>\n\n"
+                        "Already-issued child vouchers, if any, remain protected and will not be repurchased automatically."
+                    ),
+                    parse_mode=bot.ParseMode.HTML,
+                )
+                bot.logger.warning(
+                    "DAILY_REWARD_SMALL_DENOM_RECOVERY admin=%s campaign=%s rank=%s award=%s amount=%s plan=200+200+100 success=%s detail=%s",
+                    q.from_user.id, campaign_id, rank, award["id"], amount, success, str(detail)[:300],
                 )
                 return
 
@@ -362,6 +635,7 @@ def prepare(admin_rewards, bot):
         bot.logger.warning(
             "DAILY_REWARD_PROVIDER_RECOVERY active=on exact_failure_reason=on "
             "provider_status_reconcile=on retry=two_step_admin_only same_order_id=on "
+            "smaller_denom_fallback=500_to_200+200+100 explicit_admin_only=on "
             "startup_auto_retry=off locked_rewards_unchanged=on"
         )
         return daily_quiz_reward_callback
