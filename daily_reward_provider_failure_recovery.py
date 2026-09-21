@@ -147,6 +147,19 @@ def prepare(admin_rewards, bot):
             return False
         if ok and _has_voucher(data):
             return False
+
+        # GiftPort's status endpoint sometimes returns only {"status":"failed"}
+        # with no separate message. Treat an explicit terminal provider status as
+        # authoritative; previously we checked only message text, which wrongly
+        # blocked a confirmed failed order from reaching the admin retry step.
+        provider_status = str(data.get("status") or "").strip().lower()
+        terminal_statuses = {
+            "failed", "failure", "rejected", "declined",
+            "not_found", "not found", "cancelled", "canceled",
+        }
+        if provider_status in terminal_statuses:
+            return True
+
         message = str(data.get("message") or "").lower()
         terminal_words = (
             "not found", "no order", "failed", "failure", "rejected",
