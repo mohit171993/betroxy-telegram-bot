@@ -82,12 +82,21 @@ def prepare(admin_rewards, bot):
                 status = str(award.get("status") or "")
                 amount = int(award.get("amount") or admin_rewards.PRIZES[rank - 1])
                 if status == "provider_failed":
-                    recovery.append([
-                        bot.InlineKeyboardButton(
-                            f"🔎 Check Failed #{rank} ₹{amount}",
-                            callback_data=f"dq_reward_reconcile:{int(campaign['id'])}:{rank}",
-                        )
-                    ])
+                    provider_order_id = str(award.get("provider_order_id") or "")
+                    if provider_order_id.startswith("SPLIT:"):
+                        recovery.append([
+                            bot.InlineKeyboardButton(
+                                f"🧩 Continue Failed Split #{rank} ₹{amount}",
+                                callback_data=f"dq_reward_split:{int(campaign['id'])}:{rank}",
+                            )
+                        ])
+                    else:
+                        recovery.append([
+                            bot.InlineKeyboardButton(
+                                f"🔎 Check Failed #{rank} ₹{amount}",
+                                callback_data=f"dq_reward_reconcile:{int(campaign['id'])}:{rank}",
+                            )
+                        ])
         if recovery:
             # Put diagnostics before Refresh/Reward Center.
             insert_at = max(0, len(buttons) - 2)
@@ -282,6 +291,23 @@ def prepare(admin_rewards, bot):
         )
         remaining = max(0, amount - already_issued)
 
+        settings = v97.v89._reward_settings()
+        daily_limit = int(settings.get("daily_budget") or 0)
+        monthly_limit = int(settings.get("monthly_budget") or 0)
+        if already_issued == 0:
+            if daily_limit and v97._budget_used("day") + amount > daily_limit:
+                v97._award_update(
+                    award["id"], "budget_hold",
+                    error_detail="Daily reward budget guard reached",
+                )
+                return False, "Daily reward budget guard reached."
+            if monthly_limit and v97._budget_used("month") + amount > monthly_limit:
+                v97._award_update(
+                    award["id"], "budget_hold",
+                    error_detail="Monthly reward budget guard reached",
+                )
+                return False, "Monthly reward budget guard reached."
+
         if remaining:
             bal_ok, balance, currency = v97._get_balance()
             if not bal_ok:
@@ -290,7 +316,6 @@ def prepare(admin_rewards, bot):
                     error_detail=str(currency or "Could not verify GiftPort balance"),
                 )
                 return False, str(currency or "Could not verify GiftPort balance")
-            settings = v97.v89._reward_settings()
             reserve = int(settings.get("min_provider_balance") or 0)
             if str(currency or "INR").upper() != "INR":
                 v97._award_update(
@@ -333,13 +358,15 @@ def prepare(admin_rewards, bot):
                         error_detail=f"Voucher part {part.get('part_no')} status is not safely retryable",
                     )
                     return False, f"Voucher part {part.get('part_no')} status is not safely retryable."
-                # Terminal child failures require another explicit admin recovery,
-                # not an automatic repeated purchase in this same action.
-                v97._award_update(
-                    award["id"], "provider_failed",
-                    error_detail=f"Voucher part {part.get('part_no')} previously failed; manual review required",
+                # This function is reached only from an explicit admin split-
+                # recovery action. A terminal failed child can therefore be
+                # retried using the same deterministic child order id; issued
+                # children above are always skipped.
+                bot.logger.warning(
+                    "DAILY_REWARD_SMALL_DENOM_PART_RETRY_AUTHORIZED award=%s part=%s amount=%s order=%s prior_attempts=%s",
+                    award["id"], part.get("part_no"), part.get("amount"),
+                    part.get("provider_order_id"), part.get("issue_attempts"),
                 )
-                return False, f"Voucher part {part.get('part_no')} previously failed; manual review required."
 
             _mark_part_attempt(part)
             ok, buy_data = v97._giftport_post(
@@ -432,6 +459,30 @@ def prepare(admin_rewards, bot):
                     q,
                     f"Recovery is only available for Provider Failed rewards. Current: {status}",
                     show_alert=True,
+                )
+                return
+
+            if data.startswith("dq_reward_split:") and order_id.startswith("SPLIT:"):
+                await _safe_answer(q, "Checking remaining split voucher parts…")
+                success, detail = _issue_smaller_denomination_fallback(award, [200, 200, 100])
+                await q.message.reply_text(
+                    (
+                        "✅ <b>₹500 split reward recovery completed.</b>\n\n"
+                        "Issued as: <b>₹200 + ₹200 + ₹100</b>\n"
+                        f"Result: <b>{html.escape(detail)}</b>"
+                    )
+                    if success
+                    else
+                    (
+                        "⚠️ <b>Split recovery is still incomplete.</b>\n\n"
+                        f"Detail: <code>{html.escape(str(detail)[:700])}</code>\n\n"
+                        "Already-issued child vouchers remain protected; only unresolved parts are checked/retried."
+                    ),
+                    parse_mode=bot.ParseMode.HTML,
+                )
+                bot.logger.warning(
+                    "DAILY_REWARD_SMALL_DENOM_CONTINUE admin=%s campaign=%s rank=%s award=%s amount=%s plan=200+200+100 success=%s detail=%s",
+                    q.from_user.id, campaign_id, rank, award["id"], amount, success, str(detail)[:300],
                 )
                 return
 
