@@ -139,21 +139,8 @@ def worker():
             # uses the approved Mega results banner and preserves manual payout.
             _weekly._announce_due_results()
 
-            # Preserve the existing +15m/+30m admin-only payout reminders.
-            with bot.get_db() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT * FROM mega_quiz_campaigns "
-                        "WHERE result_at<=NOW() ORDER BY campaign_date DESC LIMIT 1"
-                    )
-                    latest = cur.fetchone()
-            if latest and _weekly._delivery_exists(latest["id"], _weekly.CHANNEL, "final_result"):
-                rows = _weekly._final_rows(latest["id"])
-                elapsed = (datetime.now(timezone.utc) - latest["result_at"]).total_seconds()
-                if elapsed >= 15 * 60:
-                    _weekly._send_admin_reward_alert(latest, rows, 1)
-                if elapsed >= 30 * 60:
-                    _weekly._send_admin_reward_alert(latest, rows, 2)
+            # Reference-style admin alert policy: keep the original result-time
+            # payout approval card, but suppress the +15m/+30m repeat nags.
         except Exception:
             bot.logger.exception("MEGA_CHANNEL_SCHEDULE_WORKER_FAILED")
         time.sleep(30)
@@ -198,19 +185,9 @@ def install(weekly_module, media_module):
     except Exception:
         bot.logger.exception("MEGA_BANNER_REMAP_INSTALL_FAILED")
 
-    # One-time private verification requested by the admin: send all seven final
-    # channel-post previews to the admin bot chat. The helper has its own durable
-    # per-slot dedupe and never writes real channel delivery markers.
-    try:
-        preview = __import__("weekly_mega_admin_test_posts")
-        threading.Thread(
-            target=preview.send_all_once,
-            args=(_weekly, _media, __import__(__name__)),
-            name="mega-admin-test-posts",
-            daemon=True,
-        ).start()
-        bot.logger.warning(
-            "MEGA_ADMIN_TEST_POSTS armed=on target=admin_only total=7 public_channel=off daily_quiz=untouched"
-        )
-    except Exception:
-        bot.logger.exception("MEGA_ADMIN_TEST_POSTS_ARM_FAILED")
+    # Startup preview cards are intentionally disabled by the reference-style
+    # admin alert policy. Manual preview/upload commands remain available.
+    bot.logger.warning(
+        "MEGA_ADMIN_TEST_POSTS startup_auto_send=off manual_preview_tools=on "
+        "real_channel_delivery_unchanged=on"
+    )
