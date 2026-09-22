@@ -51,7 +51,20 @@ class AdminAlertParityTests(unittest.TestCase):
         self.assertIn("BETROXY Reminder Live Status", src)
         self.assertIn("BETROXY BUSINESS INBOX", src)
         self.assertIn("BETROXY DAILY QUIZ — PERFORMANCE REPORT", src)
+        self.assertIn("NEW TELEGRAM BUSINESS ENQUIRY", src)
+        self.assertIn("Telegram Business connection updated", src)
+        self.assertIn("BETROXY Daily Reminder Queue Started", src)
+        self.assertIn("BETROXY Reminder Queue Progress", src)
+        self.assertIn("BETROXY Daily Reminder Queue Report", src)
+        self.assertIn("ACTION REQUIRED — DAILY QUIZ PAYOUT", src)
+        self.assertIn("PAYOUT REMINDER —", src)
+        self.assertIn("REMINDER — MEGA QUIZ PAYOUT STILL PENDING", src)
         self.assertIn("return await original", src)
+
+    def test_initial_prize_approval_cards_are_not_in_blocked_prefixes(self):
+        src = inspect.getsource(policy._install_async_admin_message_filter)
+        self.assertNotIn('"🏆 <b>DAILY QUIZ REWARDS — FINAL</b>"', src)
+        self.assertNotIn('"🚨 <b>ACTION REQUIRED — MEGA QUIZ PAYOUT</b>"', src)
 
     def test_protected_reward_and_weekly_files_are_not_edited_for_suppression(self):
         receipt = open("reward_receipt_confirmation.py", encoding="utf-8").read()
