@@ -246,11 +246,31 @@ def prepare(admin_rewards, bot):
 
             when_text = _fmt_when(confirmation.get("confirmed_at"))
             if first_confirmation:
-                bot.logger.info(
-                    "REWARD_RECEIPT_ADMIN_POPUP_SUPPRESSED reward=%s uid=%s "
-                    "reason=reference_admin_alert_parity",
-                    reward_id, uid,
+                username = str(getattr(q.from_user, "username", "") or "").strip()
+                display = f"@{username}" if username else (
+                    str(getattr(q.from_user, "first_name", "") or "").strip()
+                    or f"Player {str(uid)[-4:]}"
                 )
+                try:
+                    await context.bot.send_message(
+                        chat_id=int(bot.ADMIN_ID),
+                        text=(
+                            "✅ <b>WINNER CONFIRMED VOUCHER RECEIPT</b>\n\n"
+                            f"Winner: <b>{html.escape(display)}</b>\n"
+                            f"Reward ID: <code>{reward_id}</code>\n"
+                            f"Rank: <b>#{int(award.get('rank') or 0)}</b>\n"
+                            f"Amount: <b>₹{int(award.get('amount') or 0):,}</b>\n"
+                            f"Confirmed: <b>{html.escape(when_text)}</b>\n\n"
+                            "This confirms receipt of the Telegram voucher message; "
+                            "it does not confirm Amazon redemption."
+                        ),
+                        parse_mode=bot.ParseMode.HTML,
+                    )
+                except Exception:
+                    bot.logger.exception(
+                        "REWARD_RECEIPT_ADMIN_ALERT_FAILED reward=%s uid=%s",
+                        reward_id, uid,
+                    )
 
             bot.logger.warning(
                 "REWARD_RECEIPT_CONFIRMED reward=%s uid=%s rank=%s amount=%s first=%s confirmed_at=%s",
@@ -263,7 +283,7 @@ def prepare(admin_rewards, bot):
         _callback_installed = True
         bot.logger.warning(
             "REWARD_RECEIPT_CONFIRMATION_CALLBACK active=on owner_validation=on "
-            "first_confirmation_persisted=on admin_alert=off redemption_claim=off"
+            "first_confirmation_persisted=on admin_alert=on redemption_claim=off"
         )
 
     def main_with_receipt_confirmation():
