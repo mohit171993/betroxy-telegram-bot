@@ -1,0 +1,36 @@
+name: BETROXY additive CRM tests
+on:
+  push:
+    branches: [feature/betroxy-admin-verification-20260922, main]
+    paths: [betroxy_crm_store.py, betroxy_crm_ui.py, betroxy_admin_authority.py, betroxy_crm_preflight.py, test_betroxy_crm.py, .github/workflows/betroxy-crm-tests.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_ci_only
+          POSTGRES_DB: btx_crm_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BETROXY_TEST_DATABASE_URL: postgresql://postgres:disposable_ci_only@localhost:5432/btx_crm_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install python-telegram-bot==21.10 'psycopg[binary]==3.2.9'
+      - run: python -m unittest -v test_betroxy_crm
+      - run: python -c 'from betroxy_crm_preflight import check_protected; check_protected(); print("Protected core files unchanged")'
+      - run: python -m py_compile betroxy_crm_store.py betroxy_crm_ui.py betroxy_admin_authority.py betroxy_crm_preflight.py
