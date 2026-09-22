@@ -54,7 +54,7 @@ class NoBannerWelcomeTests(unittest.IsolatedAsyncioTestCase):
             await bot.start(update, context)
 
         msg.reply_text.assert_awaited_once_with(
-            "WELCOME TEXT",
+            welcome_no_banner_overlay.WELCOME_TEXT,
             parse_mode="HTML",
             reply_markup=("MENU", 2),
             disable_web_page_preview=True,
@@ -83,7 +83,8 @@ class NoBannerWelcomeTests(unittest.IsolatedAsyncioTestCase):
             msg.reply_text.assert_not_awaited()
 
     async def test_business_and_channel_banner_code_is_not_touched(self):
-        source = open("welcome_no_banner_overlay.py", "r", encoding="utf-8").read()
+        with open("welcome_no_banner_overlay.py", "r", encoding="utf-8") as handle:
+            source = handle.read()
         self.assertIn("business_banner=unchanged", source)
         self.assertIn("channel_banners=unchanged", source)
         self.assertNotIn("_send_business_reply =", source)
@@ -100,6 +101,20 @@ class NoBannerWelcomeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(bot.main, first_main)
             bot.main()
         old_main.assert_called_once()
+
+    async def test_compact_copy_is_truthful_and_business_text_is_preserved(self):
+        production, bot, _, _ = self.make()
+        business_text = lambda: "Existing Business greeting"
+        welcome = NS(_bot_welcome_text=lambda: "OLD", bot_menu=lambda uid=None: "MENU",
+                     _business_welcome_text=business_text)
+        with patch.dict(sys.modules, {"welcome_experience_v2": welcome}):
+            welcome_no_banner_overlay.prepare(production)
+            bot.main()
+        self.assertEqual(welcome._bot_welcome_text(), welcome_no_banner_overlay.WELCOME_TEXT)
+        self.assertLess(len(welcome._bot_welcome_text()), 180)
+        for label in ("Sportsbook", "Quizzes", "Rewards"):
+            self.assertIn(label, welcome._bot_welcome_text())
+        self.assertIs(welcome._business_welcome_text, business_text)
 
 
 if __name__ == "__main__":
