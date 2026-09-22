@@ -313,6 +313,75 @@ def _install_quiet_business_policy():
     v85._maybe_send_business_digest = lambda: None
 
 
+def _install_weekly_reward_alert_policy():
+    """Keep only the first action-required Mega payout card (slot 0)."""
+    import weekly_mega_quiz as weekly
+
+    original = weekly._send_admin_reward_alert
+    if getattr(original, "_btx_reference_alert_wrapped", False):
+        return
+
+    def first_only(campaign, rows, slot):
+        if int(slot or 0) > 0:
+            log.info(
+                "BTX_MEGA_PAYOUT_REPEAT_SUPPRESSED campaign=%s slot=%s",
+                campaign.get("id"), slot,
+            )
+            return False
+        return original(campaign, rows, slot)
+
+    first_only._btx_reference_alert_wrapped = True
+    first_only._btx_reference_alert_original = original
+    weekly._send_admin_reward_alert = first_only
+
+
+def _install_async_admin_message_filter():
+    """Suppress a small set of legacy unsolicited admin popups additively.
+
+    The filter is installed on the Telegram bot class only after the application
+    exists. It does not block customer messages, admin-command replies, payout
+    approval cards, or the two reference-style alerts produced by this module.
+    """
+    old_post_init = _bot.post_init
+
+    async def post_init_with_filter(app):
+        cls = app.bot.__class__
+        current = cls.send_message
+        if getattr(current, "_btx_admin_alert_filter", False) is not True:
+            original = current
+            blocked_prefixes = (
+                "✅ <b>WINNER CONFIRMED VOUCHER RECEIPT</b>",
+                "🔄 <b>BETROXY Reminder Live Status</b>",
+                "📬 <b>BETROXY BUSINESS INBOX • DAILY SUMMARY</b>",
+                "🔴 <b>BUSINESS CHAT NEEDS ATTENTION</b>",
+                "🟠 <b>RESOLVED CUSTOMER RETURNED</b>",
+                "🟢 <b>NEW BUSINESS LEAD</b>",
+                "📊 <b>BETROXY DAILY QUIZ — PERFORMANCE REPORT</b>",
+            )
+
+            async def filtered_send_message(self, chat_id, text, *args, **kwargs):
+                try:
+                    is_admin = int(chat_id) == int(_bot.ADMIN_ID)
+                except Exception:
+                    is_admin = False
+                value = str(text or "")
+                if is_admin and value.startswith(blocked_prefixes):
+                    log.info(
+                        "BTX_LEGACY_ADMIN_POPUP_SUPPRESSED prefix=%s",
+                        value.split("\n", 1)[0][:120],
+                    )
+                    return None
+                return await original(self, chat_id, text, *args, **kwargs)
+
+            filtered_send_message._btx_admin_alert_filter = True
+            filtered_send_message._btx_admin_alert_original = original
+            cls.send_message = filtered_send_message
+
+        return await old_post_init(app)
+
+    _bot.post_init = post_init_with_filter
+
+
 def _report_stats():
     people = _store.snapshot()
     now = datetime.now(timezone.utc)
@@ -470,6 +539,8 @@ def prepare(production, store):
     _install_verification_alert()
     _install_quiet_reminder_admin_policy()
     _install_quiet_business_policy()
+    _install_weekly_reward_alert_policy()
+    _install_async_admin_message_filter()
 
     # Disable startup-triggered Weekly Mega preview cards without affecting any
     # real channel post, uploader or schedule.
@@ -497,6 +568,6 @@ def prepare(production, store):
         "15m_heartbeat=off queue_progress_popups=off "
         "business_popups=off daily_business_digest=off "
         "payout_repeat_nags=off receipt_confirmation_popup=off "
-        "initial_action_required_payout_card=preserved "
+        "quiz_performance_popup=off initial_action_required_payout_card=preserved "
         "customer_delivery_unchanged=on"
     )
