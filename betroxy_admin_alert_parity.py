@@ -350,6 +350,7 @@ def _install_async_admin_message_filter():
         if getattr(current, "_btx_admin_alert_filter", False) is not True:
             original = current
             blocked_prefixes = (
+                # Receipt/status/report popups: state remains visible in admin screens.
                 "✅ <b>WINNER CONFIRMED VOUCHER RECEIPT</b>",
                 "🔄 <b>BETROXY Reminder Live Status</b>",
                 "📬 <b>BETROXY BUSINESS INBOX • DAILY SUMMARY</b>",
@@ -357,6 +358,24 @@ def _install_async_admin_message_filter():
                 "🟠 <b>RESOLVED CUSTOMER RETURNED</b>",
                 "🟢 <b>NEW BUSINESS LEAD</b>",
                 "📊 <b>BETROXY DAILY QUIZ — PERFORMANCE REPORT</b>",
+
+                # Legacy V49 Business handlers can still be registered underneath
+                # the newer silent inbox. Suppress their unsolicited admin copies.
+                "🔌 <b>Telegram Business connection updated</b>",
+                "🔔 <b>NEW TELEGRAM BUSINESS ENQUIRY</b>",
+
+                # Backstop any legacy reminder worker that was armed before the
+                # quiet installer. Customer delivery itself is not affected.
+                "🛡 <b>BETROXY Daily Reminder Queue Started</b>",
+                "📊 <b>BETROXY Reminder Queue Progress</b>",
+                "✅ <b>BETROXY Daily Reminder Queue Report</b>",
+
+                # Repeat payout nags stay quiet. The original result-time approval
+                # cards remain untouched: DAILY QUIZ REWARDS — FINAL and the first
+                # ACTION REQUIRED — MEGA QUIZ PAYOUT card still reach the admin.
+                "🚨🚨 <b>ACTION REQUIRED — DAILY QUIZ PAYOUT</b> 🚨🚨",
+                "⏰ <b>PAYOUT REMINDER —",
+                "⏰ <b>REMINDER — MEGA QUIZ PAYOUT STILL PENDING</b>",
             )
 
             async def filtered_send_message(self, chat_id, text, *args, **kwargs):
@@ -568,6 +587,7 @@ def prepare(production, store):
         "15m_heartbeat=off queue_progress_popups=off "
         "business_popups=off daily_business_digest=off "
         "payout_repeat_nags=off receipt_confirmation_popup=off "
-        "quiz_performance_popup=off initial_action_required_payout_card=preserved "
+        "quiz_performance_popup=off legacy_business_enquiry_popups=off "
+        "payout_repeat_fallback_filter=on initial_action_required_payout_card=preserved "
         "customer_delivery_unchanged=on"
     )
