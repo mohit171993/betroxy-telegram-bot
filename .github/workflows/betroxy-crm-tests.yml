@@ -1,7 +1,7 @@
 name: BETROXY additive CRM tests
 on:
   push:
-    branches: [feature/betroxy-admin-verification-20260922, fix/betroxy-test-start-verification-20260922, ui/betroxy-compact-first-screen-20260922, ui/betroxy-remove-welcome-banner-20260922, main]
+    branches: [feature/betroxy-admin-verification-20260922, fix/betroxy-test-start-verification-20260922, ui/betroxy-compact-first-screen-20260922, ui/betroxy-remove-welcome-banner-20260922, ui/betroxy-welcome-copy-20260922, main]
     paths: [betroxy_crm_store.py, betroxy_crm_ui.py, betroxy_admin_authority.py, betroxy_crm_preflight.py, test_betroxy_crm.py, betroxy_start_verification_pilot.py, test_betroxy_start_verification.py, test_betroxy_first_screen.py, welcome_no_banner_overlay.py, test_betroxy_no_banner.py, .github/workflows/betroxy-crm-tests.yml]
   workflow_dispatch:
 permissions:
