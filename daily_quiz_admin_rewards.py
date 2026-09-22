@@ -14,6 +14,7 @@ Eligible payout is dynamic:
 After the public final-result announcement, the primary admin receives one
 private Telegram approval alert. Duplicate protection prevents repeat alerts.
 """
+import asyncio
 import html
 from datetime import datetime, timezone
 
@@ -26,6 +27,7 @@ v89 = v97.v89
 _previous_callback = None
 _original_reward_center_keyboard = v97._reward_center_keyboard
 _original_announce_if_due = None
+_approval_inflight = set()
 
 PRIZES = (500, 300, 200)
 MEDALS = ("🥇", "🥈", "🥉")
@@ -347,8 +349,44 @@ def install():
             if total <= 0:
                 await q.answer("No eligible winners. No payout is required.", show_alert=True)
                 return
-            await q.answer(f"Issuing approved rewards: ₹{total}…")
-            results = _issue_approved_awards(campaign, rows)
+            if campaign_id in _approval_inflight:
+                try:
+                    await q.answer("Prize distribution is already processing.", show_alert=True)
+                except Exception as exc:
+                    bot.logger.warning(
+                        "DAILY_QUIZ_ADMIN_APPROVAL_DUPLICATE_ACK_SKIPPED campaign=%s reason=%s",
+                        campaign_id, type(exc).__name__,
+                    )
+                return
+
+            # Provider purchase/status calls are synchronous and can take minutes.
+            # Never run them on the Telegram asyncio event loop: doing so freezes
+            # every admin button until GiftPort returns.
+            _approval_inflight.add(campaign_id)
+            try:
+                try:
+                    await q.answer(f"Prize distribution started: ₹{total}")
+                except Exception as exc:
+                    bot.logger.warning(
+                        "DAILY_QUIZ_ADMIN_APPROVAL_ACK_SKIPPED campaign=%s reason=%s",
+                        campaign_id, type(exc).__name__,
+                    )
+                try:
+                    await q.message.reply_text(
+                        f"⏳ <b>Prize distribution started</b> — ₹{total}\n"
+                        "Admin controls remain available while vouchers are processed.",
+                        parse_mode=bot.ParseMode.HTML,
+                    )
+                except Exception:
+                    bot.logger.exception(
+                        "DAILY_QUIZ_ADMIN_APPROVAL_PROGRESS_MESSAGE_FAILED campaign=%s",
+                        campaign_id,
+                    )
+
+                results = await asyncio.to_thread(_issue_approved_awards, campaign, rows)
+            finally:
+                _approval_inflight.discard(campaign_id)
+
             lines = [
                 "✅ <b>DAILY QUIZ REWARD APPROVAL PROCESSED</b>",
                 "",
