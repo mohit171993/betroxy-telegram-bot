@@ -139,7 +139,7 @@ class PostgresTests(unittest.TestCase):
         parsed=urlparse(DB)
         if parsed.hostname not in {'localhost','127.0.0.1','postgres'} or parsed.path!='/btx_crm_test':
             raise RuntimeError('Refusing non-disposable test database')
-        cls.pg=psycopg;cls.dict_row=dict_row
+        cls.pg=psycopg;cls.dict_row=staticmethod(dict_row)
     def setUp(self):
         self.schema='btx_test_'+uuid.uuid4().hex
         with self.pg.connect(DB) as c:c.execute('CREATE SCHEMA '+self.schema)
