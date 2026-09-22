@@ -12,6 +12,11 @@ from __future__ import annotations
 import logging
 
 log = logging.getLogger(__name__)
+WELCOME_TEXT = (
+    "👋 <b>Welcome to BETROXY</b>\n\n"
+    "Sportsbook • Daily &amp; Sunday Quizzes • Rewards\n\n"
+    "Choose an option below 👇"
+)
 
 
 def prepare(production):
@@ -25,6 +30,9 @@ def prepare(production):
         previous_start = bot.start
         if getattr(previous_start, "_welcome_no_banner_overlay", False) is not True:
             import welcome_experience_v2 as welcome
+
+            # Shorten only direct-bot welcome/home text; leave Business copy intact.
+            welcome._bot_welcome_text = lambda: WELCOME_TEXT
 
             async def text_only_start(update, context):
                 args = list(getattr(context, "args", []) or [])
@@ -87,7 +95,7 @@ def prepare(production):
         bot.logger.warning(
             "WELCOME_NO_BANNER_OVERLAY active=on officialbot_start_banner=off "
             "business_banner=unchanged channel_banners=unchanged "
-            "menu=unchanged deep_links=unchanged"
+            "menu=unchanged deep_links=unchanged welcome_text=compact"
         )
         return previous_main()
 
