@@ -1,11 +1,14 @@
-"""Optional BETROXY admin entrypoint. Rollback: previous receipt authority.
+"""BETROXY admin entrypoint with a pinned-test-account start verification pilot.
 
-The original entrypoints, quizzes, rewards, banners and customer routing are
-unchanged. No database records are deleted. SMS OTP is not enabled.
+Original core files and non-test customer routing remain unchanged. No startup
+mobile reset, SMS OTP, extra poller, or prize purchase is introduced.
+Rollback: restore this file from commit 1fa3afe26dbbf6f924b116aea85eb5a5061a6666.
 """
 import reward_receipt_confirmation_authority as prior
 import betroxy_crm_ui
+import betroxy_start_verification_pilot
 
 if __name__ == "__main__":
-    betroxy_crm_ui.prepare(prior.production)
+    store, ui = betroxy_crm_ui.prepare(prior.production)
+    betroxy_start_verification_pilot.attach(ui)
     prior.production.main()
