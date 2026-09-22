@@ -23,7 +23,7 @@ def prepare(production):
 
     def main_with_text_only_welcome():
         previous_start = bot.start
-        if not getattr(previous_start, "_welcome_no_banner_overlay", False):
+        if getattr(previous_start, "_welcome_no_banner_overlay", False) is not True:
             import welcome_experience_v2 as welcome
 
             async def text_only_start(update, context):
