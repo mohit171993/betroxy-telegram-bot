@@ -72,11 +72,13 @@ class StartVerificationPilot:
                 "args": list(context.args or []),
             }
             await update.effective_message.reply_text(
-                "📱 Mobile verification required\n\n"
-                "Before continuing, share the mobile number linked to your Telegram account.\n\n"
-                "Tap ✅ VERIFY & CONTINUE below. After verification, your existing BETROXY menu or requested page will open.\n\n"
-                "Your number will be saved for your account and rewards. This does not change your marketing preferences.\n"
-                "Use /cancelcrm or /stop to cancel.",
+                "📱 <b>Mobile verification required</b>\n\n"
+                "<b>BETROXY</b>\n"
+                "Sportsbook · Daily Quiz · Rewards\n\n"
+                "Verify your Telegram-linked mobile to continue.\n\n"
+                "🔒 Saved for your account and rewards. Marketing preferences stay unchanged.\n"
+                "Cancel: /cancelcrm or /stop",
+                parse_mode="HTML",
                 reply_markup=keyboard(),
             )
             log.warning("BTX_START_VERIFY_PROMPT_SENT uid=%s scope=pinned_tester old_welcome_deferred=on", uid)
