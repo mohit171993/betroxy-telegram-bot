@@ -3,12 +3,14 @@ import os
 import hmac
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from zoneinfo import ZoneInfo
 
 import psycopg
 from psycopg.rows import dict_row
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 SECRET = os.getenv("REPORT_METRICS_SECRET", "").strip()
+REPORT_TZ = ZoneInfo("Asia/Dubai")
 
 
 def scalar(cur, sql, params=()):
@@ -33,8 +35,29 @@ def table_exists(cur, name):
     return bool(next(iter(row.values())) if isinstance(row, dict) else row[0])
 
 
+def report_day_windows(days=3):
+    now_local = datetime.now(timezone.utc).astimezone(REPORT_TZ)
+    today = now_local.date()
+    windows = []
+    for offset in range(days):
+        day = today - timedelta(days=offset)
+        start_local = datetime(day.year, day.month, day.day, tzinfo=REPORT_TZ)
+        end_local = start_local + timedelta(days=1)
+        windows.append(
+            (
+                day.isoformat(),
+                start_local.astimezone(timezone.utc),
+                end_local.astimezone(timezone.utc),
+            )
+        )
+    return windows
+
+
 def metrics():
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    day_windows = report_day_windows(3)
+    verified_by_date = {day: 0 for day, _, _ in day_windows}
+
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             cur.execute("SET TRANSACTION READ ONLY")
@@ -77,6 +100,13 @@ def metrics():
                     "SELECT COUNT(DISTINCT telegram_user_id) FROM v110_mobile_verifications WHERE verified_via='telegram_contact' AND verified_at >= %s",
                     (cutoff,),
                 )
+                for day, start_utc, end_utc in day_windows:
+                    verified_by_date[day] = scalar(
+                        cur,
+                        "SELECT COUNT(DISTINCT telegram_user_id) FROM v110_mobile_verifications "
+                        "WHERE verified_via='telegram_contact' AND verified_at >= %s AND verified_at < %s",
+                        (start_utc, end_utc),
+                    )
 
             bot_users = leads
 
@@ -89,6 +119,8 @@ def metrics():
                 "completed_registrations": None,
                 "verified": verified,
                 "verified_24h": verified_24h,
+                "verified_by_date": verified_by_date,
+                "verified_timezone": "Asia/Dubai",
                 "registration_note": "Completed external-site registrations are not available unless the destination sends a conversion event back.",
             }
 
