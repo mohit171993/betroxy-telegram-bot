@@ -3,7 +3,7 @@
 Only replaces the public "/" Flask view at startup. Existing creator landing
 routes, bot flows, CRM, quizzes, rewards and admin functions remain unchanged.
 """
-from flask import Response
+from flask import Response, send_file
 
 SIGNUP_URL = (
     "https://app.affiliar.co/api/r/SNLINK?"
@@ -287,6 +287,22 @@ def prepare(production):
         return Response(HTML, mimetype="text/html")
 
     app.view_functions["landing_root"] = transparent_landing_root
+
+    def meta_live_sports_creative():
+        return send_file(
+            "media/live-sports-hub-meta.jpg",
+            mimetype="image/jpeg",
+            max_age=3600,
+        )
+
+    if "batraxy_meta_live_sports_creative" not in app.view_functions:
+        app.add_url_rule(
+            "/media/live-sports-hub-meta.jpg",
+            endpoint="batraxy_meta_live_sports_creative",
+            view_func=meta_live_sports_creative,
+            methods=["GET"],
+        )
+
     bot._batraxy_transparent_landing_prepared = True
     bot.logger.warning(
         "BATRAXY_TRANSPARENT_LANDING active=on root_only=on "
