@@ -9,6 +9,7 @@ SIGNUP_URL = (
     "https://app.affiliar.co/api/r/SNLINK?"
     "to=https%3A%2F%2Fbetroxy.com%2F%3Fmodal%3Dauth%26tab%3Dregister"
 )
+TELEGRAM_URL = "https://t.me/BetroxyBot"
 
 HTML = """<!doctype html>
 <html lang="en">
@@ -76,14 +77,32 @@ HTML = """<!doctype html>
     .accent{color:var(--accent)}
     .hero p{margin:0;color:var(--muted);font-size:18px;line-height:1.7}
     .cta-wrap{margin-top:30px}
+    .cta-row{display:flex;gap:12px;flex-wrap:wrap}
     .cta{
       display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:17px 28px;
       border-radius:16px;background:linear-gradient(135deg,var(--accent),#f3d46d);color:#111;
       font-weight:800;font-size:17px;box-shadow:0 12px 30px rgba(212,175,55,.28);
       transition:transform .18s ease,box-shadow .18s ease
     }
+    .cta.telegram{
+      background:linear-gradient(135deg,#2AABEE,#168ACD);color:#fff;
+      box-shadow:0 12px 30px rgba(42,171,238,.24)
+    }
     .cta:hover{transform:translateY(-2px);box-shadow:0 16px 36px rgba(212,175,55,.35)}
+    .cta.telegram:hover{box-shadow:0 16px 36px rgba(42,171,238,.34)}
     .cta-note{margin-top:12px;color:#d8dee7;font-size:13px;line-height:1.55}
+    .hero-tagline{margin:0;color:#d8dee7;font-size:20px;line-height:1.55;max-width:620px}
+    .hero-graphic-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:28px}
+    .graphic-card{
+      background:rgba(255,255,255,.065);border:1px solid rgba(255,255,255,.1);
+      border-radius:18px;padding:17px 15px;min-height:132px
+    }
+    .graphic-icon{
+      width:44px;height:44px;border-radius:14px;display:flex;align-items:center;
+      justify-content:center;background:rgba(255,255,255,.08);font-size:21px;margin-bottom:12px
+    }
+    .graphic-title{font-size:15px;font-weight:800;margin-bottom:6px}
+    .graphic-text{font-size:13px;line-height:1.45;color:var(--muted)}
     .hero-side{padding:28px;display:flex;flex-direction:column;justify-content:space-between;gap:18px}
     .hero-card-title{font-size:20px;font-weight:700;margin-bottom:10px}
     .hero-card-text{color:var(--muted);font-size:15px;line-height:1.7}
@@ -111,7 +130,7 @@ HTML = """<!doctype html>
     .footer strong{color:#dbe2eb}
     @media(max-width:980px){
       .hero{grid-template-columns:1fr}
-      .trust-strip,.features{grid-template-columns:1fr}
+      .trust-strip,.features,.hero-graphic-cards{grid-template-columns:1fr}
       h1{font-size:42px}
       .hero-main{padding:38px 26px}
     }
@@ -119,6 +138,7 @@ HTML = """<!doctype html>
       .topbar{gap:12px;flex-direction:column;align-items:flex-start}
       h1{font-size:34px}
       .hero p{font-size:16px}
+      .cta-row{flex-direction:column}
       .cta{width:100%}
     }
   </style>
@@ -132,20 +152,39 @@ HTML = """<!doctype html>
 
     <section class="hero">
       <div class="hero-main">
-        <div class="eyebrow">Transparent redirect • Clear destination</div>
-        <h1>Continue to <span class="accent">Betroxy</span><br />Registration</h1>
-        <p>
-          Batraxy is a transparent referral page. If you continue, you will leave
-          Batraxy and be redirected to <strong>Betroxy's registration flow</strong>
-          through a clearly disclosed affiliate tracking link.
-        </p>
+        <div class="eyebrow">Premium Access • Two Ways to Continue</div>
+        <h1>Start Your Journey with <span class="accent">Batraxy</span></h1>
+        <div class="hero-tagline">Premium access. Smooth experience. One clear next step.</div>
 
         <div class="cta-wrap">
-          <a class="cta" href="__SIGNUP_URL__" rel="sponsored nofollow noopener">
-            Continue to Betroxy
-          </a>
+          <div class="cta-row">
+            <a class="cta" href="__SIGNUP_URL__" rel="sponsored nofollow noopener">
+              Continue to Betroxy
+            </a>
+            <a class="cta telegram" href="__TELEGRAM_URL__" rel="noopener">
+              Play on Telegram Bot
+            </a>
+          </div>
           <div class="cta-note">
-            You will be redirected to <strong>Betroxy.com</strong> to continue signup.
+            Website signup continues to <strong>Betroxy.com</strong> • Telegram opens <strong>@BetroxyBot</strong>
+          </div>
+        </div>
+
+        <div class="hero-graphic-cards">
+          <div class="graphic-card">
+            <div class="graphic-icon">⚡</div>
+            <div class="graphic-title">Fast Access</div>
+            <div class="graphic-text">Choose web signup or Telegram in one tap.</div>
+          </div>
+          <div class="graphic-card">
+            <div class="graphic-icon">✦</div>
+            <div class="graphic-title">Premium Experience</div>
+            <div class="graphic-text">Clean, modern and mobile-first interface.</div>
+          </div>
+          <div class="graphic-card">
+            <div class="graphic-icon">↗</div>
+            <div class="graphic-title">Clear Destination</div>
+            <div class="graphic-text">Continue to Betroxy or open @BetroxyBot.</div>
           </div>
         </div>
       </div>
@@ -234,7 +273,7 @@ HTML = """<!doctype html>
     </footer>
   </div>
 </body>
-</html>""".replace("__SIGNUP_URL__", SIGNUP_URL)
+</html>""".replace("__SIGNUP_URL__", SIGNUP_URL).replace("__TELEGRAM_URL__", TELEGRAM_URL)
 
 
 def prepare(production):
