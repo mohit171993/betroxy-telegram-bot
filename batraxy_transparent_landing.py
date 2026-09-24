@@ -3,13 +3,24 @@
 Only replaces the public "/" Flask view at startup. Existing creator landing
 routes, bot flows, CRM, quizzes, rewards and admin functions remain unchanged.
 """
-from flask import Response, send_file
+import hashlib
+import hmac
+import os
 
-SIGNUP_URL = (
+from flask import Response, jsonify, redirect, request, send_file
+
+AFFILIATE_DESTINATION = (
     "https://app.affiliar.co/api/r/SNLINK?"
     "to=https%3A%2F%2Fbetroxy.com%2F%3Fmodal%3Dauth%26tab%3Dregister"
 )
-TELEGRAM_URL = "https://t.me/BetroxyBot"
+TELEGRAM_DESTINATION = "https://t.me/BetroxyBot"
+
+# Keep public buttons on batraxy.com so every outbound choice is counted before
+# redirecting to the disclosed destination.
+SIGNUP_URL = "/batraxy/go/affiliate"
+TELEGRAM_URL = "/batraxy/go/telegram"
+ANALYTICS_SLUG = "batraxy-home"
+ANALYTICS_CODE = "batraxy_home"
 
 HTML = """<!doctype html>
 <html lang="en">
@@ -276,6 +287,196 @@ HTML = """<!doctype html>
 </html>""".replace("__SIGNUP_URL__", SIGNUP_URL).replace("__TELEGRAM_URL__", TELEGRAM_URL)
 
 
+def _visitor_fingerprint():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    ip = forwarded.split(",")[0].strip() if forwarded else (request.remote_addr or "")
+    ua = request.headers.get("User-Agent", "")[:500]
+    raw = f"{ip}|{ua}".encode("utf-8", "ignore")
+    return hashlib.sha256(raw).hexdigest(), ua
+
+
+def _record_home_visit(bot):
+    fingerprint, ua = _visitor_fingerprint()
+    referer = request.headers.get("Referer", "")[:1000]
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            # Match the existing creator-page semantics: a reload from the same
+            # device within 30 minutes is not counted as a new landing visit.
+            cur.execute(
+                """
+                SELECT 1 FROM landing_events
+                WHERE slug=%s AND visitor_hash=%s
+                  AND created_at >= NOW() - INTERVAL '30 minutes'
+                LIMIT 1
+                """,
+                (ANALYTICS_SLUG, fingerprint),
+            )
+            if not cur.fetchone():
+                cur.execute(
+                    """
+                    INSERT INTO landing_events
+                        (slug, agent_code, visitor_hash, user_agent, referer)
+                    VALUES (%s,%s,%s,%s,%s)
+                    """,
+                    (ANALYTICS_SLUG, ANALYTICS_CODE, fingerprint, ua, referer),
+                )
+        conn.commit()
+
+
+def _record_home_click(bot, destination):
+    if destination not in {"affiliate", "telegram"}:
+        return False
+    fingerprint, _ = _visitor_fingerprint()
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            # Ignore accidental double-taps while still preserving intentional
+            # repeat clicks later in the same session.
+            cur.execute(
+                """
+                SELECT 1 FROM outbound_events
+                WHERE slug=%s AND visitor_hash=%s AND destination=%s
+                  AND created_at >= NOW() - INTERVAL '5 seconds'
+                LIMIT 1
+                """,
+                (ANALYTICS_SLUG, fingerprint, destination),
+            )
+            if not cur.fetchone():
+                cur.execute(
+                    """
+                    INSERT INTO outbound_events
+                        (slug, agent_code, destination, visitor_hash)
+                    VALUES (%s,%s,%s,%s)
+                    """,
+                    (ANALYTICS_SLUG, ANALYTICS_CODE, destination, fingerprint),
+                )
+        conn.commit()
+    return True
+
+
+def _batraxy_period_metrics(bot, interval_sql):
+    visit_where = "agent_code=%s"
+    click_where = "agent_code=%s"
+    if interval_sql:
+        visit_where += f" AND created_at >= {interval_sql}"
+        click_where += f" AND created_at >= {interval_sql}"
+
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS visits,
+                    COUNT(DISTINCT visitor_hash)
+                        FILTER (WHERE visitor_hash IS NOT NULL) AS unique_visitors,
+                    MAX(created_at) AS last_visit_at
+                FROM landing_events
+                WHERE {visit_where}
+                """,
+                (ANALYTICS_CODE,),
+            )
+            visits = cur.fetchone() or {}
+
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE destination='affiliate') AS affiliate_clicks,
+                    COUNT(*) FILTER (WHERE destination='telegram') AS telegram_clicks,
+                    COUNT(DISTINCT visitor_hash)
+                        FILTER (WHERE destination='affiliate' AND visitor_hash IS NOT NULL)
+                        AS unique_affiliate_clickers,
+                    COUNT(DISTINCT visitor_hash)
+                        FILTER (WHERE destination='telegram' AND visitor_hash IS NOT NULL)
+                        AS unique_telegram_clickers,
+                    COUNT(DISTINCT visitor_hash)
+                        FILTER (WHERE destination IN ('affiliate','telegram')
+                                AND visitor_hash IS NOT NULL)
+                        AS unique_cta_clickers,
+                    MAX(created_at) AS last_click_at
+                FROM outbound_events
+                WHERE {click_where}
+                """,
+                (ANALYTICS_CODE,),
+            )
+            clicks = cur.fetchone() or {}
+
+    v = int(visits.get("visits") or 0)
+    uv = int(visits.get("unique_visitors") or 0)
+    a = int(clicks.get("affiliate_clicks") or 0)
+    t = int(clicks.get("telegram_clicks") or 0)
+    ua = int(clicks.get("unique_affiliate_clickers") or 0)
+    ut = int(clicks.get("unique_telegram_clickers") or 0)
+    ucta = int(clicks.get("unique_cta_clickers") or 0)
+
+    def pct(n, d):
+        return round((n / d * 100.0), 2) if d else 0.0
+
+    last_visit = visits.get("last_visit_at")
+    last_click = clicks.get("last_click_at")
+    return {
+        "landing_visits": v,
+        "unique_visitors": uv,
+        "affiliate_clicks": a,
+        "telegram_clicks": t,
+        "total_cta_clicks": a + t,
+        "unique_affiliate_clickers": ua,
+        "unique_telegram_clickers": ut,
+        "unique_cta_clickers": ucta,
+        "affiliate_ctr": pct(ua, uv),
+        "telegram_ctr": pct(ut, uv),
+        "cta_ctr": pct(ucta, uv),
+        "last_visit_at": last_visit.isoformat() if last_visit else None,
+        "last_click_at": last_click.isoformat() if last_click else None,
+    }
+
+
+def _batraxy_analytics(bot):
+    periods = {
+        "24h": _batraxy_period_metrics(bot, "NOW() - INTERVAL '24 hours'"),
+        "7d": _batraxy_period_metrics(bot, "NOW() - INTERVAL '7 days'"),
+        "30d": _batraxy_period_metrics(bot, "NOW() - INTERVAL '30 days'"),
+        "all": _batraxy_period_metrics(bot, None),
+    }
+
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(NULLIF(TRIM(referer),''),'Direct / unknown') AS referer,
+                    COUNT(*) AS visits,
+                    COUNT(DISTINCT visitor_hash)
+                        FILTER (WHERE visitor_hash IS NOT NULL) AS unique_visitors
+                FROM landing_events
+                WHERE agent_code=%s
+                  AND created_at >= NOW() - INTERVAL '30 days'
+                GROUP BY 1
+                ORDER BY visits DESC
+                LIMIT 8
+                """,
+                (ANALYTICS_CODE,),
+            )
+            referrers = [
+                {
+                    "referer": str(row.get("referer") or "Direct / unknown")[:300],
+                    "visits": int(row.get("visits") or 0),
+                    "unique_visitors": int(row.get("unique_visitors") or 0),
+                }
+                for row in cur.fetchall()
+            ]
+
+    return {
+        "ok": True,
+        "site": "www.batraxy.com",
+        "periods": periods,
+        "top_referrers_30d": referrers,
+        "tracking": {
+            "landing_dedupe_minutes": 30,
+            "click_dedupe_seconds": 5,
+            "visitor_id": "privacy-safe hash of IP + user agent; raw IP is not stored",
+        },
+    }
+
+
 def prepare(production):
     bot = production.bot
     if getattr(bot, "_batraxy_transparent_landing_prepared", False):
@@ -284,9 +485,66 @@ def prepare(production):
     app = bot.tracker_api
 
     def transparent_landing_root():
-        return Response(HTML, mimetype="text/html")
+        try:
+            _record_home_visit(bot)
+        except Exception:
+            bot.logger.exception("BATRAXY_HOME_VISIT_TRACK_FAILED")
+        response = Response(HTML, mimetype="text/html")
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return response
 
     app.view_functions["landing_root"] = transparent_landing_root
+
+    def batraxy_affiliate_redirect():
+        try:
+            _record_home_click(bot, "affiliate")
+        except Exception:
+            bot.logger.exception("BATRAXY_AFFILIATE_CLICK_TRACK_FAILED")
+        return redirect(AFFILIATE_DESTINATION, code=302)
+
+    def batraxy_telegram_redirect():
+        try:
+            _record_home_click(bot, "telegram")
+        except Exception:
+            bot.logger.exception("BATRAXY_TELEGRAM_CLICK_TRACK_FAILED")
+        return redirect(TELEGRAM_DESTINATION, code=302)
+
+    def batraxy_analytics_api():
+        expected = os.getenv("BATRAXY_ANALYTICS_KEY", "").strip()
+        supplied = request.headers.get("X-Batraxy-Key", "")
+        if not expected:
+            return jsonify({"ok": False, "error": "analytics_key_not_configured"}), 503
+        if not hmac.compare_digest(expected, supplied):
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+        try:
+            response = jsonify(_batraxy_analytics(bot))
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        except Exception:
+            bot.logger.exception("BATRAXY_ANALYTICS_FAILED")
+            return jsonify({"ok": False, "error": "analytics_unavailable"}), 500
+
+    if "batraxy_affiliate_redirect" not in app.view_functions:
+        app.add_url_rule(
+            "/batraxy/go/affiliate",
+            endpoint="batraxy_affiliate_redirect",
+            view_func=batraxy_affiliate_redirect,
+            methods=["GET"],
+        )
+    if "batraxy_telegram_redirect" not in app.view_functions:
+        app.add_url_rule(
+            "/batraxy/go/telegram",
+            endpoint="batraxy_telegram_redirect",
+            view_func=batraxy_telegram_redirect,
+            methods=["GET"],
+        )
+    if "batraxy_analytics_api" not in app.view_functions:
+        app.add_url_rule(
+            "/api/batraxy/analytics",
+            endpoint="batraxy_analytics_api",
+            view_func=batraxy_analytics_api,
+            methods=["GET"],
+        )
 
     def meta_live_sports_creative():
         return send_file(
@@ -307,5 +565,6 @@ def prepare(production):
     bot.logger.warning(
         "BATRAXY_TRANSPARENT_LANDING active=on root_only=on "
         "premium_design=on affiliate_disclosure=on "
-        "betroxy_destination_disclosed=on"
+        "betroxy_destination_disclosed=on analytics=on "
+        "affiliate_clicks=on telegram_clicks=on"
     )
