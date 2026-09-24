@@ -1,4 +1,4 @@
-"""Transparent Batraxy homepage overlay.
+"""Premium transparent Batraxy homepage overlay.
 
 Only replaces the public "/" Flask view at startup. Existing creator landing
 routes, bot flows, CRM, quizzes, rewards and admin functions remain unchanged.
@@ -13,64 +13,226 @@ SIGNUP_URL = (
 HTML = """<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Batraxy information page for Betroxy registration.">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Batraxy | Continue to Betroxy</title>
+  <meta
+    name="description"
+    content="Batraxy is a transparent referral page. Continue to Betroxy registration through a clearly disclosed affiliate link."
+  />
   <style>
+    :root{
+      --bg:#071018;
+      --bg2:#0d1824;
+      --card:rgba(255,255,255,0.08);
+      --card-border:rgba(255,255,255,0.12);
+      --text:#f5f7fb;
+      --muted:#b9c2cf;
+      --accent:#d4af37;
+      --white:#ffffff;
+      --shadow:0 20px 60px rgba(0,0,0,0.35);
+      --radius:22px;
+    }
     *{box-sizing:border-box}
-    body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#0c0f14;color:#f4f6f8}
-    .wrap{max-width:980px;margin:0 auto;padding:28px 20px 48px}
-    .nav{display:flex;align-items:center;justify-content:space-between;padding:8px 0 26px}
-    .brand{font-size:25px;font-weight:800;letter-spacing:.8px}
-    .badge{font-size:13px;padding:8px 12px;border:1px solid #39414d;border-radius:999px;color:#cbd1d8}
-    .hero{border:1px solid #2b323d;border-radius:24px;padding:48px 38px;background:#141922;box-shadow:0 18px 50px rgba(0,0,0,.28)}
-    h1{font-size:46px;line-height:1.08;margin:0 0 18px;max-width:760px}
-    .lead{font-size:19px;line-height:1.6;color:#c9cfd6;max-width:760px;margin:0 0 28px}
-    .notice{padding:18px 20px;border-radius:14px;background:#1d2430;border:1px solid #39414d;line-height:1.55;color:#e6e9ed;margin:0 0 28px}
-    .cta{display:inline-block;text-decoration:none;font-weight:800;font-size:17px;padding:15px 24px;border-radius:12px;background:#fff;color:#111}
-    .sub{font-size:13px;color:#9da6b2;margin-top:14px;max-width:680px;line-height:1.5}
-    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:24px}
-    .card{border:1px solid #2b323d;border-radius:16px;padding:18px;background:#11161e}
-    .card strong{display:block;margin-bottom:7px}
-    .card span{font-size:14px;color:#aeb6c0;line-height:1.45}
-    footer{margin-top:30px;color:#8f98a4;font-size:13px;line-height:1.6}
-    @media(max-width:720px){h1{font-size:36px}.hero{padding:34px 22px}.grid{grid-template-columns:1fr}}
+    html,body{margin:0;padding:0}
+    body{
+      font-family:Inter,Arial,Helvetica,sans-serif;
+      color:var(--text);
+      background:
+        radial-gradient(circle at top right, rgba(37,211,102,0.14), transparent 28%),
+        radial-gradient(circle at top left, rgba(212,175,55,0.14), transparent 25%),
+        linear-gradient(180deg,var(--bg),var(--bg2));
+      min-height:100vh;
+    }
+    a{text-decoration:none}
+    .container{width:min(1180px,calc(100% - 32px));margin:0 auto}
+    .topbar{display:flex;justify-content:space-between;align-items:center;padding:22px 0}
+    .brand{font-size:28px;font-weight:800;letter-spacing:.08em;color:var(--white)}
+    .pill{
+      padding:10px 16px;border:1px solid var(--card-border);border-radius:999px;
+      background:rgba(255,255,255,0.05);color:var(--muted);font-size:13px;
+      backdrop-filter:blur(12px)
+    }
+    .hero{
+      display:grid;grid-template-columns:1.15fr .85fr;gap:24px;align-items:stretch;
+      padding:24px 0
+    }
+    .hero-main,.hero-side,.info-box,.feature,.trust-item{
+      background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius);
+      backdrop-filter:blur(16px);box-shadow:var(--shadow)
+    }
+    .hero-main{padding:52px 46px;position:relative;overflow:hidden}
+    .hero-main::before{
+      content:"";position:absolute;inset:auto -80px -80px auto;width:240px;height:240px;
+      background:radial-gradient(circle,rgba(212,175,55,0.22),transparent 70%);
+      border-radius:50%;pointer-events:none
+    }
+    .eyebrow{
+      display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;
+      font-size:13px;color:#e7eaf0;background:rgba(255,255,255,0.07);
+      border:1px solid rgba(255,255,255,0.12);margin-bottom:18px
+    }
+    h1{margin:0 0 18px;font-size:56px;line-height:1.02;letter-spacing:-.03em;max-width:760px}
+    .accent{color:var(--accent)}
+    .hero p{margin:0;color:var(--muted);font-size:18px;line-height:1.7}
+    .cta-wrap{margin-top:30px}
+    .cta{
+      display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:17px 28px;
+      border-radius:16px;background:linear-gradient(135deg,var(--accent),#f3d46d);color:#111;
+      font-weight:800;font-size:17px;box-shadow:0 12px 30px rgba(212,175,55,.28);
+      transition:transform .18s ease,box-shadow .18s ease
+    }
+    .cta:hover{transform:translateY(-2px);box-shadow:0 16px 36px rgba(212,175,55,.35)}
+    .cta-note{margin-top:12px;color:#d8dee7;font-size:13px;line-height:1.55}
+    .hero-side{padding:28px;display:flex;flex-direction:column;justify-content:space-between;gap:18px}
+    .hero-card-title{font-size:20px;font-weight:700;margin-bottom:10px}
+    .hero-card-text{color:var(--muted);font-size:15px;line-height:1.7}
+    .mini-grid{display:grid;gap:14px}
+    .trust-strip{margin-top:8px;display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+    .trust-item{padding:22px 18px}
+    .trust-item h3{margin:0 0 8px;font-size:17px}
+    .trust-item p{margin:0;font-size:14px;color:var(--muted);line-height:1.6}
+    .section{margin-top:34px}
+    .info-box{padding:28px 26px}
+    .info-box h2{margin:0 0 10px;font-size:24px;color:var(--white)}
+    .info-box p{margin:0;color:var(--muted);line-height:1.75;font-size:16px}
+    .features{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:18px}
+    .feature{padding:24px 22px}
+    .feature .icon{
+      width:48px;height:48px;border-radius:14px;display:flex;align-items:center;
+      justify-content:center;background:rgba(255,255,255,0.08);font-size:22px;margin-bottom:14px
+    }
+    .feature h3{margin:0 0 10px;font-size:18px}
+    .feature p{margin:0;color:var(--muted);font-size:15px;line-height:1.7}
+    .footer{
+      margin:38px 0 28px;padding:22px 0 10px;border-top:1px solid rgba(255,255,255,.08);
+      color:#9aa6b5;font-size:13px;line-height:1.8
+    }
+    .footer strong{color:#dbe2eb}
+    @media(max-width:980px){
+      .hero{grid-template-columns:1fr}
+      .trust-strip,.features{grid-template-columns:1fr}
+      h1{font-size:42px}
+      .hero-main{padding:38px 26px}
+    }
+    @media(max-width:640px){
+      .topbar{gap:12px;flex-direction:column;align-items:flex-start}
+      h1{font-size:34px}
+      .hero p{font-size:16px}
+      .cta{width:100%}
+    }
   </style>
 </head>
 <body>
-  <main class="wrap">
-    <div class="nav">
+  <div class="container">
+    <div class="topbar">
       <div class="brand">BATRAXY</div>
-      <div class="badge">18+ only</div>
+      <div class="pill">18+ Only • Transparent Referral Page</div>
     </div>
+
     <section class="hero">
-      <h1>Continue to Betroxy registration</h1>
-      <p class="lead">
-        Batraxy is an information and referral page. If you choose to continue,
-        you will leave Batraxy and open the Betroxy registration flow.
-      </p>
-      <div class="notice">
-        <strong>Transparent redirect:</strong> the signup button below uses an affiliate tracking link
-        and ultimately directs you to <strong>betroxy.com</strong> for account registration.
+      <div class="hero-main">
+        <div class="eyebrow">Transparent redirect • Clear destination</div>
+        <h1>Continue to <span class="accent">Betroxy</span><br />Registration</h1>
+        <p>
+          Batraxy is a transparent referral page. If you continue, you will leave
+          Batraxy and be redirected to <strong>Betroxy's registration flow</strong>
+          through a clearly disclosed affiliate tracking link.
+        </p>
+
+        <div class="cta-wrap">
+          <a class="cta" href="__SIGNUP_URL__" rel="sponsored nofollow noopener">
+            Continue to Betroxy
+          </a>
+          <div class="cta-note">
+            You will be redirected to <strong>Betroxy.com</strong> to continue signup.
+          </div>
+        </div>
       </div>
-      <a class="cta" href="__SIGNUP_URL__" rel="sponsored nofollow noopener">Continue to Betroxy Signup</a>
-      <div class="sub">
-        By continuing, you acknowledge that Betroxy is a separate third-party service and that
-        registration, eligibility, terms, payments and any gaming activity are governed by Betroxy.
-        Availability may vary by location.
-      </div>
-      <div class="grid">
-        <div class="card"><strong>Clear destination</strong><span>The button explicitly continues to Betroxy registration.</span></div>
-        <div class="card"><strong>Affiliate disclosure</strong><span>The outbound signup link contains affiliate tracking.</span></div>
-        <div class="card"><strong>Responsible use</strong><span>Adults 18+ only. Please follow local laws and play responsibly.</span></div>
+
+      <div class="hero-side">
+        <div>
+          <div class="hero-card-title">Important Notice</div>
+          <div class="hero-card-text">
+            This page does not complete signup itself. Registration, eligibility,
+            account access, payments, platform rules, and usage terms are handled
+            directly by <strong>Betroxy</strong>.
+          </div>
+        </div>
+
+        <div class="mini-grid">
+          <div class="trust-item">
+            <h3>Clear Destination</h3>
+            <p>You are clearly informed that the button continues to Betroxy registration.</p>
+          </div>
+          <div class="trust-item">
+            <h3>Affiliate Disclosure</h3>
+            <p>The registration button uses an affiliate-tracking link before opening Betroxy.</p>
+          </div>
+        </div>
       </div>
     </section>
-    <footer>
-      Batraxy is not presented as an independent cricket-score or live-line product on this page.
-      The purpose of this page is to explain the outbound Betroxy registration destination before you continue.
+
+    <section class="trust-strip">
+      <div class="trust-item">
+        <h3>Direct Path</h3>
+        <p>Simple, clean route to Betroxy without hiding the destination.</p>
+      </div>
+      <div class="trust-item">
+        <h3>Transparent Redirect</h3>
+        <p>Batraxy is presented as a referral page, not as a separate signup platform.</p>
+      </div>
+      <div class="trust-item">
+        <h3>18+ Only</h3>
+        <p>Adults only. Please act responsibly and follow local laws where applicable.</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="info-box">
+        <h2>Why continue through Batraxy?</h2>
+        <p>
+          We keep the path simple and fully disclosed. The purpose of this page is to
+          explain exactly where the button goes before you continue. When you click,
+          you proceed to Betroxy through a transparent affiliate link.
+        </p>
+      </div>
+
+      <div class="features">
+        <div class="feature">
+          <div class="icon">→</div>
+          <h3>Simple Signup Path</h3>
+          <p>
+            No confusion about where you are going. One clear action takes you to the
+            Betroxy registration page.
+          </p>
+        </div>
+        <div class="feature">
+          <div class="icon">✓</div>
+          <h3>Transparent Referral</h3>
+          <p>
+            The page clearly states that Batraxy is a referral page and that the
+            registration process is completed on Betroxy.
+          </p>
+        </div>
+        <div class="feature">
+          <div class="icon">★</div>
+          <h3>Premium Experience</h3>
+          <p>
+            A polished layout, premium styling, and a strong call to action create a
+            cleaner and more attractive first impression.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <strong>Batraxy</strong> is a transparent referral page. By clicking the button
+      above, you leave this page and continue to <strong>Betroxy</strong>. The signup
+      button uses an affiliate-tracking link. <strong>18+ only.</strong> Availability
+      may vary by location. Please play responsibly and comply with applicable laws.
     </footer>
-  </main>
+  </div>
 </body>
 </html>""".replace("__SIGNUP_URL__", SIGNUP_URL)
 
@@ -85,10 +247,10 @@ def prepare(production):
     def transparent_landing_root():
         return Response(HTML, mimetype="text/html")
 
-    # Replace only the existing Flask endpoint bound to "/".
     app.view_functions["landing_root"] = transparent_landing_root
     bot._batraxy_transparent_landing_prepared = True
     bot.logger.warning(
         "BATRAXY_TRANSPARENT_LANDING active=on root_only=on "
-        "affiliate_disclosure=on betroxy_destination_disclosed=on"
+        "premium_design=on affiliate_disclosure=on "
+        "betroxy_destination_disclosed=on"
     )
