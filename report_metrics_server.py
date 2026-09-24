@@ -108,6 +108,49 @@ def metrics():
                         (start_utc, end_utc),
                     )
 
+            by_campaign = {}
+            if table_exists(cur, "referrals"):
+                try:
+                    if table_exists(cur, "v110_mobile_verifications"):
+                        cur.execute(
+                            """
+                            SELECT lower(COALESCE(NULLIF(r.start_payload,''),'direct')) campaign,
+                                   COUNT(DISTINCT r.telegram_user_id) leads,
+                                   COUNT(DISTINCT v.telegram_user_id)
+                                       FILTER (WHERE v.verified_via='telegram_contact') verified,
+                                   COUNT(DISTINCT v.telegram_user_id)
+                                       FILTER (
+                                           WHERE v.verified_via='telegram_contact'
+                                             AND v.verified_at >= %s
+                                       ) verified_24h
+                            FROM referrals r
+                            LEFT JOIN v110_mobile_verifications v
+                              ON v.telegram_user_id=r.telegram_user_id
+                            GROUP BY lower(COALESCE(NULLIF(r.start_payload,''),'direct'))
+                            """,
+                            (cutoff,),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT lower(COALESCE(NULLIF(start_payload,''),'direct')) campaign,
+                                   COUNT(DISTINCT telegram_user_id) leads,
+                                   0 verified,
+                                   0 verified_24h
+                            FROM referrals
+                            GROUP BY lower(COALESCE(NULLIF(start_payload,''),'direct'))
+                            """
+                        )
+                    for row in cur.fetchall():
+                        key = str(row.get("campaign") or "direct").lower()
+                        by_campaign[key] = {
+                            "leads": int(row.get("leads") or 0),
+                            "verified": int(row.get("verified") or 0),
+                            "verified_24h": int(row.get("verified_24h") or 0),
+                        }
+                except Exception:
+                    by_campaign = {}
+
             bot_users = leads
 
             return {
@@ -121,6 +164,7 @@ def metrics():
                 "verified_24h": verified_24h,
                 "verified_by_date": verified_by_date,
                 "verified_timezone": "Asia/Dubai",
+                "by_campaign": by_campaign,
                 "registration_note": "Completed external-site registrations are not available unless the destination sends a conversion event back.",
             }
 
