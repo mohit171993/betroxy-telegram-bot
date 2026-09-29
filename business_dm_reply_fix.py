@@ -7,6 +7,7 @@ import time
 import requests
 
 import bot
+import betroxy_mode
 import betroxy_universal_verification as access
 from telegram.ext import ApplicationHandlerStop
 import v85_silent_business_inbox as v85
@@ -159,6 +160,12 @@ def _direct_business_send(enquiry):
         return None
     intent = biz51._detect_intent(str(enquiry.get("last_message_text") or ""))
     text, keyboard, stage = biz51._reply_payload(intent, first_reply=True)
+    if betroxy_mode.is_quiz():
+        # This raw-HTTP backfill can run before the normal Business sender is
+        # patched. Use a fixed quiz-only payload and no approved banner.
+        text = "Open the official BETROXY bot to verify your account and join the daily quiz."
+        keyboard = betroxy_mode.clean_business_menu()
+        stage = "engaged"
     markup = keyboard.to_dict() if keyboard else None
     payload = {
         "chat_id": str(enquiry["customer_chat_id"]),
@@ -175,11 +182,17 @@ def _direct_business_send(enquiry):
     data = r.json() if r.content else {}
     if not (r.ok and data.get("ok")):
         # Some Business chat/client combinations may reject inline markup. Retry
-        # plain text with official links rather than leave the customer unanswered.
-        fallback = (
-            html.unescape(text.replace("<b>", "").replace("</b>", ""))
-            + f"\n\nBetroxyBot: {biz51.BETROXY_PRODUCT_BOT}\nWebsite: {biz51.BETROXY_WEBSITE}"
-        )
+        # plain text, preserving the active mode's destination.
+        if betroxy_mode.is_quiz():
+            fallback = (
+                "Open the official BETROXY bot to verify your account and join the daily quiz."
+                f"\nhttps://t.me/{bot.BOT_USERNAME}?start=dailyquiz"
+            )
+        else:
+            fallback = (
+                html.unescape(text.replace("<b>", "").replace("</b>", ""))
+                + f"\n\nBetroxyBot: {biz51.BETROXY_PRODUCT_BOT}\nWebsite: {biz51.BETROXY_WEBSITE}"
+            )
         payload.pop("reply_markup", None)
         payload["text"] = fallback
         payload.pop("parse_mode", None)
@@ -289,3 +302,4 @@ def install():
         "BUSINESS_DM_REPLY_FIX active=on first_enquiry=always_reply explicit_start=reply explicit_greeting=reply cooldown=20s backfill=v2_exact_recent_customer"
     )
     return business_message_update_with_menu_reply
+

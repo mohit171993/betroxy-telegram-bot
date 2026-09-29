@@ -5,6 +5,7 @@ import threading
 import time
 
 import bot
+import betroxy_mode
 import v113_text_quiz_ux as quiz
 import v87_single_optin_reminder as reminder
 import daily_quiz_schedule as daily_schedule
@@ -30,10 +31,12 @@ v110.CHANNEL_CHAT = "@betroxyupdates"
 
 
 def _result_rows(campaign):
-    return [
+    rows = [
         [{"text": "🏆 LIVE LEADERBOARD", "callback_data": f"v110_leaderboard:{campaign['id']}"}],
-        [{"text": "🚀 EXPLORE BETROXY", "url": v110.OPEN_APP_URL}],
     ]
+    if not betroxy_mode.is_quiz():
+        rows.append([{"text": "🚀 EXPLORE BETROXY", "url": v110.OPEN_APP_URL}])
+    return rows
 
 
 def _result_text(entry, rank, already=False):
@@ -107,9 +110,10 @@ def _install_text_only_leaderboard():
             await q.message.reply_text(
                 _leaderboard_text(campaign),
                 parse_mode=bot.ParseMode.HTML,
-                reply_markup=bot.InlineKeyboardMarkup([
-                    [bot.InlineKeyboardButton("🚀 OPEN BETROXY", url=v110.OPEN_APP_URL)]
-                ]),
+                reply_markup=(betroxy_mode.clean_menu() if betroxy_mode.is_quiz()
+                              else bot.InlineKeyboardMarkup([
+                                  [bot.InlineKeyboardButton("🚀 OPEN BETROXY", url=v110.OPEN_APP_URL)]
+                              ])),
             )
             bot.logger.warning("QUIZ_TEXT_LEADERBOARD uid=%s campaign=%s image=off", q.from_user.id, campaign["id"])
             return
@@ -172,6 +176,8 @@ def _feature_guard(compact_menu, quiz_alerts, business_menu=None, dm_reply_handl
 
 
 def main():
+    # Load the persisted switch before any recovery or channel helper can send.
+    betroxy_mode.initialize(bot)
     # Re-assert manual-only daily quiz rewards after all imports.
     daily_schedule.AUTO_REWARDS_ENABLED = False
     v110._ensure_schema()
@@ -285,6 +291,10 @@ def main():
     answer_review = importlib.import_module("betroxy_answer_review")
     answer_review.install(compact_menu, globals())
 
+    # The last route wrapper owns the global QUIZ/FULL state. It must be
+    # installed after the legacy menu and quiz overlays and before workers run.
+    betroxy_mode.install(__import__(__name__), compact_menu)
+
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()
@@ -311,3 +321,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
