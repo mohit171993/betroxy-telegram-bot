@@ -119,7 +119,7 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
         with self.assertRaises(StopProcessing):
             asyncio.run(self.gate._callback(update(1456774567, callback=query), self.context))
         copy = " ".join(text for text, _ in msg.replies)
-        self.assertNotRegex(copy, re.compile(r"sports|betting|gambl|casino|odds|wager|18\+", re.I))
+        self.assertNotRegex(copy, re.compile(r"sports|betting|gambl|casino|odds|wager|18\+|ibetin\.com", re.I))
         self.assertEqual(len(msg.replies), 2)
 
     async def _answer(self):
@@ -135,7 +135,9 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
                 self.assertTrue(keyboard.kwargs["is_persistent"])
                 self.assertFalse(keyboard.kwargs["one_time_keyboard"])
                 button = keyboard.args[0][0][0]
+                self.assertEqual(button.args[0], "📱 VERIFY & CONTINUE")
                 self.assertTrue(button.kwargs["request_contact"])
+                self.assertIn("VERIFY & CONTINUE", msg.replies[0][0])
 
     def test_only_self_contact_unlocks_existing_routes(self):
         uid = 1456774567
@@ -158,7 +160,7 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
         enquiry = {"id": 1, "customer_chat_id": 4, "connection_id": "abc", "auto_ack_sent_at": None}
         asyncio.run(self.gate.neutral_business_reply(self.context, enquiry, "general", inbox, conversion))
         copy = self.bot.sent[0]["text"]
-        self.assertNotRegex(copy, re.compile(r"sports|betting|gambl|casino|odds|wager|18\+", re.I))
+        self.assertNotRegex(copy, re.compile(r"sports|betting|gambl|casino|odds|wager|18\+|ibetin\.com", re.I))
         self.assertIn("verify", copy.lower())
 
     def test_outbound_and_global_profile_do_not_expose_unverified_routes(self):
@@ -188,7 +190,7 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
         asyncio.run(bot_module.post_init(app))
         self.assertEqual(previous, [True])
         self.assertEqual(handlers, [-20000, -20000])
-        self.assertNotRegex(" ".join(self.bot.descriptions), re.compile(r"sports|betting|gambl|casino|odds|wager|18\+", re.I))
+        self.assertNotRegex(" ".join(self.bot.descriptions), re.compile(r"sports|betting|gambl|casino|odds|wager|18\+|ibetin\.com", re.I))
 
 
 if __name__ == "__main__":

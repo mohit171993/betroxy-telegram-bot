@@ -1,8 +1,9 @@
 """BETROXY admin-alert parity policy.
 
 Goal: match the useful alert pattern used by the IBETIN/FANTZO admin flows:
-1) one immediate alert for a genuinely new verified lead;
-2) one consolidated automation/growth report every two hours.
+1) immediate verified-lead and Business enquiry alerts;
+2) one consolidated automation/growth report daily at 09:00 IST;
+3) prompt new delivery-failure alerts.
 
 Everything else remains available inside the existing admin/CRM screens but does
 not interrupt the admin as a background popup. Customer delivery, quiz rules,
@@ -15,11 +16,14 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import requests
 
 log = logging.getLogger(__name__)
-REPORT_INTERVAL_SECONDS = 2 * 60 * 60
+REPORT_TZ = ZoneInfo("Asia/Kolkata")
+REPORT_HOUR_IST = 9
+FAILURE_CHECK_SECONDS = 60
 _prepared = False
 _store = None
 _bot = None
@@ -290,26 +294,9 @@ def _install_quiet_reminder_admin_policy():
 
 
 def _install_quiet_business_policy():
+    # The existing V85 handler sends one new-enquiry notice and escalates
+    # conversations needing attention. Keep only its duplicate daily digest off.
     import v85_silent_business_inbox as v85
-
-    async def silent_attention(context, enquiry, intent, inbound_preview, reason, reopened=False):
-        log.info(
-            "BTX_BUSINESS_ATTENTION_POPUP_SUPPRESSED enquiry=%s reopened=%s reason=%s",
-            enquiry.get("id"),
-            bool(reopened),
-            str(reason or "")[:120],
-        )
-        return None
-
-    async def silent_new(context, enquiry, intent, inbound_preview, auto_replied):
-        log.info(
-            "BTX_BUSINESS_NEW_POPUP_SUPPRESSED enquiry=%s",
-            enquiry.get("id"),
-        )
-        return None
-
-    v85._send_attention_alert = silent_attention
-    v85._send_new_lead_alert = silent_new
     v85._maybe_send_business_digest = lambda: None
 
 
@@ -354,9 +341,6 @@ def _install_async_admin_message_filter():
                 "✅ <b>WINNER CONFIRMED VOUCHER RECEIPT</b>",
                 "🔄 <b>BETROXY Reminder Live Status</b>",
                 "📬 <b>BETROXY BUSINESS INBOX • DAILY SUMMARY</b>",
-                "🔴 <b>BUSINESS CHAT NEEDS ATTENTION</b>",
-                "🟠 <b>RESOLVED CUSTOMER RETURNED</b>",
-                "🟢 <b>NEW BUSINESS LEAD</b>",
                 "📊 <b>BETROXY DAILY QUIZ — PERFORMANCE REPORT</b>",
 
                 # Legacy V49 Business handlers can still be registered underneath
@@ -504,7 +488,7 @@ def _report_stats():
     }
 
 
-def _send_two_hour_report():
+def _send_daily_report():
     s = _report_stats()
     text = (
         "📊 <b>BETROXY AUTOMATION & GROWTH REPORT</b>\n"
@@ -529,7 +513,7 @@ def _send_two_hour_report():
         "<b>DAILY QUIZ TODAY</b>\n"
         f"▶️ Started: <b>{s['quiz_started_today']}</b> · "
         f"✅ Completed: <b>{s['quiz_completed_today']}</b>\n\n"
-        "🔄 Automatic report: every 2 hours"
+        "🔄 Daily summary: 09:00 IST"
     )
     return _send_admin(
         text,
@@ -538,14 +522,47 @@ def _send_two_hour_report():
 
 
 def _report_worker():
-    # Match the reference bots: no extra startup message, first report after 2h.
-    time.sleep(REPORT_INTERVAL_SECONDS)
+    # One summary per day at 09:00 India time; startup stays quiet.
     while True:
+        now = datetime.now(REPORT_TZ)
+        target = now.replace(hour=REPORT_HOUR_IST, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        time.sleep(max(1, (target - now).total_seconds()))
         try:
-            _send_two_hour_report()
+            _send_daily_report()
         except Exception:
-            log.exception("BTX_REFERENCE_TWO_HOUR_REPORT_FAILED")
-        time.sleep(REPORT_INTERVAL_SECONDS)
+            log.exception("BTX_DAILY_ADMIN_REPORT_FAILED")
+
+
+def _failure_worker():
+    """Alert promptly for newly failed private quiz/reminder deliveries."""
+    checked_at = datetime.now(timezone.utc)
+    while True:
+        time.sleep(FAILURE_CHECK_SECONDS)
+        try:
+            now = datetime.now(timezone.utc)
+            with _bot.get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS n FROM engagement_log
+                        WHERE status='failed' AND created_at>%s AND created_at<=%s
+                        """,
+                        (checked_at, now),
+                    )
+                    count = int((cur.fetchone() or {}).get("n") or 0)
+            if count:
+                ok = _send_admin(
+                    "⚠️ <b>BETROXY REMINDER DELIVERY FAILED</b>\n"
+                    f"New failures: <b>{count}</b>\n"
+                    "Check /betroxy_status and the admin delivery dashboard."
+                )
+                if not ok:
+                    continue
+            checked_at = now
+        except Exception:
+            log.exception("BTX_DELIVERY_FAILURE_ALERT_FAILED")
 
 
 def prepare(production, store):
@@ -580,12 +597,19 @@ def prepare(production, store):
         daemon=True,
     ).start()
 
+    threading.Thread(
+        target=_failure_worker,
+        name="betroxy-delivery-failure-alert",
+        daemon=True,
+    ).start()
+
     _prepared = True
     _bot.logger.warning(
         "BTX_ADMIN_ALERT_PARITY active=on reference=ibetin+fantzo "
-        "new_verified_lead=immediate two_hour_summary=on "
+        "new_verified_lead=immediate business_enquiry=immediate "
+        "delivery_failure=prompt daily_summary=09:00_IST "
         "15m_heartbeat=off queue_progress_popups=off "
-        "business_popups=off daily_business_digest=off "
+        "business_popups=on daily_business_digest=off "
         "payout_repeat_nags=off receipt_confirmation_popup=off "
         "quiz_performance_popup=off legacy_business_enquiry_popups=off "
         "payout_repeat_fallback_filter=on initial_action_required_payout_card=preserved "

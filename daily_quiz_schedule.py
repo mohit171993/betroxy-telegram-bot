@@ -2,11 +2,11 @@
 
 Policy:
 - one daily attempt per Telegram user (existing DB unique constraint)
-- participation any time until 21:00 Asia/Dubai
+- participation any time until 21:00 Asia/Kolkata
 - 30 seconds per question
 - visible countdown refreshes at 20s, 10s and 5s remaining
 - live leaderboard is provisional
-- final results at 21:05 Asia/Dubai
+- final results at 21:05 Asia/Kolkata
 - winners: #1 ₹500, #2 ₹300, #3 ₹200
 - configured test accounts can participate but are excluded from prize ranking
 - GiftPort operator GPAPGV, auto reward issuance separately gated
@@ -299,7 +299,7 @@ def _announce_if_due():
 
 def schedule_worker():
     bot.logger.warning(
-        "QUIZ_SCHEDULE_WORKER start enabled=%s close=21:00 result=21:05 tz=Asia/Dubai question_seconds=30 result_channel=%s auto_rewards=%s exclusions=%s",
+        "QUIZ_SCHEDULE_WORKER start enabled=%s close=21:00 result=21:05 tz=Asia/Kolkata question_seconds=30 result_channel=%s auto_rewards=%s exclusions=%s",
         SCHEDULE_ENABLED, RESULT_CHANNEL_ENABLED, AUTO_REWARDS_ENABLED,
         sorted(PRIZE_EXCLUDED_USERNAMES),
     )
