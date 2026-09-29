@@ -61,16 +61,16 @@ async def neutral_business_reply(context, enquiry, intent, inbox, conversion):
 
 def _keyboard():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("Verify my account", request_contact=True)]],
+        [[KeyboardButton("📱 VERIFY & CONTINUE", request_contact=True)]],
         resize_keyboard=True,
         one_time_keyboard=False,
         is_persistent=True,
-        input_field_placeholder="Share your own Telegram contact",
+        input_field_placeholder="Tap VERIFY & CONTINUE",
     )
 
 
 PROMPT = (
-    "To continue, verify your Telegram account. Tap the button below to share "
+    "To continue, verify your Telegram account. Tap 📱 VERIFY & CONTINUE below to share "
     "your own Telegram-linked contact. A typed number or someone else's contact "
     "cannot verify your account."
 )

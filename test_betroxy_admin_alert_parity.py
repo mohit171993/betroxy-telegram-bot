@@ -19,8 +19,10 @@ class AdminAlertParityTests(unittest.TestCase):
             mark.assert_called_once()
             send.assert_not_called()
 
-    def test_reference_report_cadence_is_two_hours(self):
-        self.assertEqual(policy.REPORT_INTERVAL_SECONDS, 2 * 60 * 60)
+    def test_daily_report_uses_india_time(self):
+        self.assertEqual(policy.REPORT_TZ.key, "Asia/Kolkata")
+        self.assertEqual(policy.REPORT_HOUR_IST, 9)
+        self.assertEqual(policy.FAILURE_CHECK_SECONDS, 60)
 
     def test_quiet_policy_has_no_15_minute_heartbeat_thread(self):
         src = inspect.getsource(policy._install_quiet_reminder_admin_policy)
@@ -29,10 +31,10 @@ class AdminAlertParityTests(unittest.TestCase):
         self.assertIn("quiz_alerts._admin_notice = silent_notice", src)
         self.assertIn("payout_repeat_alerts=off", src)
 
-    def test_business_popups_and_digest_are_suppressed(self):
+    def test_business_enquiries_alert_and_daily_digest_is_suppressed(self):
         src = inspect.getsource(policy._install_quiet_business_policy)
-        self.assertIn("_send_attention_alert = silent_attention", src)
-        self.assertIn("_send_new_lead_alert = silent_new", src)
+        self.assertNotIn("_send_attention_alert = silent_attention", src)
+        self.assertNotIn("_send_new_lead_alert = silent_new", src)
         self.assertIn("_maybe_send_business_digest = lambda: None", src)
 
     def test_weekly_repeat_is_runtime_filtered_but_initial_card_survives(self):

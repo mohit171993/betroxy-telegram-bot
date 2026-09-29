@@ -54,9 +54,9 @@ def csv_cell(value):
 
 
 def parse_followup(text, now=None):
-    result = datetime.strptime(text.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("Asia/Dubai")).astimezone(timezone.utc)
+    result = datetime.strptime(text.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("Asia/Kolkata")).astimezone(timezone.utc)
     if result <= (now or datetime.now(timezone.utc)):
-        raise ValueError("Choose a future date/time in Dubai time.")
+        raise ValueError("Choose a future date/time in India time (IST).")
     return result
 
 
