@@ -63,7 +63,8 @@ def _keyboard():
     return ReplyKeyboardMarkup(
         [[KeyboardButton("Verify my account", request_contact=True)]],
         resize_keyboard=True,
-        one_time_keyboard=True,
+        one_time_keyboard=False,
+        is_persistent=True,
         input_field_placeholder="Share your own Telegram contact",
     )
 

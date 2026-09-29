@@ -125,6 +125,18 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
     async def _answer(self):
         return None
 
+    def test_unverified_contact_button_persists_across_start_and_hi(self):
+        for text in ("/start", "hi"):
+            with self.subTest(text=text):
+                msg = FakeMessage(text)
+                with self.assertRaises(StopProcessing):
+                    asyncio.run(self.gate._message(update(1456774567, msg), self.context))
+                keyboard = msg.replies[0][1]["reply_markup"]
+                self.assertTrue(keyboard.kwargs["is_persistent"])
+                self.assertFalse(keyboard.kwargs["one_time_keyboard"])
+                button = keyboard.args[0][0][0]
+                self.assertTrue(button.kwargs["request_contact"])
+
     def test_only_self_contact_unlocks_existing_routes(self):
         uid = 1456774567
         wrong = FakeMessage(contact=SimpleNamespace(user_id=2, phone_number="+919876543210"))
