@@ -91,6 +91,16 @@ def _eligible_official_users():
                 WHERE l.reachable_bot=TRUE
                   AND l.opt_out=FALSE
                   AND COALESCE(l.lifecycle_stage,'') NOT IN ('suppressed','unreachable','opted_out')
+                  AND EXISTS (
+                      SELECT 1 FROM v110_mobile_verifications v
+                      JOIN user_contact_profiles p
+                        ON p.telegram_user_id=v.telegram_user_id
+                      WHERE v.telegram_user_id=l.telegram_user_id
+                        AND p.mobile_removed_at IS NULL
+                        AND REGEXP_REPLACE(COALESCE(p.mobile_number,''),'[^0-9]','','g')
+                          = REGEXP_REPLACE(COALESCE(v.mobile_number,''),'[^0-9]','','g')
+                        AND COALESCE(p.mobile_number,'')<>''
+                  )
                 ORDER BY l.telegram_user_id
             """)
             return [int(r["telegram_user_id"]) for r in cur.fetchall()]
@@ -135,6 +145,16 @@ def _eligible_business_chats():
                       AND inbound.last_inbound_at >= NOW()-INTERVAL '{BUSINESS_RECENT_HOURS} hours'
                       AND COALESCE(l.opt_out,FALSE)=FALSE
                       AND COALESCE(l.lifecycle_stage,'') NOT IN ('suppressed','unreachable','opted_out')
+                      AND EXISTS (
+                          SELECT 1 FROM v110_mobile_verifications v
+                          JOIN user_contact_profiles p
+                            ON p.telegram_user_id=v.telegram_user_id
+                          WHERE v.telegram_user_id=e.customer_user_id
+                            AND p.mobile_removed_at IS NULL
+                            AND REGEXP_REPLACE(COALESCE(p.mobile_number,''),'[^0-9]','','g')
+                              = REGEXP_REPLACE(COALESCE(v.mobile_number,''),'[^0-9]','','g')
+                            AND COALESCE(p.mobile_number,'')<>''
+                      )
                     ORDER BY e.customer_user_id, inbound.last_inbound_at DESC
                 """)
                 return cur.fetchall()
@@ -492,7 +512,7 @@ def _dispatch_cycle(target_day, source):
             status = str(result.get("status") or "")
             if status == "already_sent":
                 stats["already_sent"] += 1
-            elif status in {"business_no_longer_safe", "business_automation_disabled"}:
+            elif status in {"business_no_longer_safe", "business_automation_disabled", "verification_required"}:
                 stats["skipped"] += 1
             elif status == "in_progress":
                 stats["skipped"] += 1
@@ -589,3 +609,4 @@ channel_media_manager.install(v110, schedule)
 # Admin-only private end-to-end media test. Never posts to the public channel.
 import channel_media_private_test as channel_media_private_test
 channel_media_private_test.install()
+
