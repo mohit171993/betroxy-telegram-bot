@@ -10,7 +10,7 @@ import logging
 LOGGER = logging.getLogger(__name__)
 TARGET_USERNAME = "mohit_97saxena"
 TARGET_UID = 1456774567
-RESET_KEY = "mohit_97saxena_verification_reset_2026_09_29"
+RESET_KEY = "mohit_97saxena_verification_reset_2026_09_29_after_test"
 
 
 def _validated_uid(candidate_ids, pinned_uid):
