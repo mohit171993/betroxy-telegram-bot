@@ -289,4 +289,3 @@ def install():
         "BUSINESS_DM_REPLY_FIX active=on first_enquiry=always_reply explicit_start=reply explicit_greeting=reply cooldown=20s backfill=v2_exact_recent_customer"
     )
     return business_message_update_with_menu_reply
-
