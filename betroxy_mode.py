@@ -7,8 +7,10 @@ button or change the separate @BetroxyBot Mini App or public website.
 import asyncio
 import functools
 import inspect
+import logging
 import re
 import threading
+import time
 from urllib.parse import parse_qs, urlparse
 
 
@@ -16,10 +18,15 @@ _lock = threading.RLock()
 _mode = "full"  # Startup loads the persisted value before polling begins.
 _bot = None
 _installed = False
+_mode_checked_at = 0.0
+_mode_refresh_failed = False
 _reconcile_generation = 0
 _reconcile_status = {"mode": "full", "state": "idle", "checked": 0, "updated": 0, "skipped": 0, "failed": 0}
 MENU_REFRESH_PAGE_SIZE = 200
 MENU_REFRESH_INTERVAL_SECONDS = 0.2
+MODE_CACHE_SECONDS = 1.0
+MODE_DB_TIMEOUT_SECONDS = 2
+_LOG = logging.getLogger(__name__)
 
 QUIZ_HOME_TEXT = (
     "🏆 <b>BETROXY Quiz</b>\n\n"
@@ -93,7 +100,7 @@ def _row_mode(row):
 
 def initialize(bot_module):
     """Load durable state before customer workers or polling can start."""
-    global _bot, _mode
+    global _bot, _mode, _mode_checked_at, _mode_refresh_failed
     with _lock:
         with bot_module.get_db() as conn:
             with conn.cursor() as cur:
@@ -116,11 +123,46 @@ def initialize(bot_module):
             conn.commit()
         _bot = bot_module
         _mode = _row_mode(row)
+        _mode_checked_at = time.monotonic()
+        _mode_refresh_failed = False
     return _mode
 
 
 def current_mode():
-    return _mode
+    """Read through Postgres so overlapping workers share the same switch.
+
+    A bounded cache avoids a query for every menu button or quiz send. If the
+    mode store cannot be read, this worker stays in QUIZ until it recovers.
+    """
+    global _mode, _mode_checked_at, _mode_refresh_failed
+    now = time.monotonic()
+    if _bot is None or now - _mode_checked_at < MODE_CACHE_SECONDS:
+        return _mode
+    with _lock:
+        now = time.monotonic()
+        if now - _mode_checked_at < MODE_CACHE_SECONDS:
+            return _mode
+        try:
+            with _bot.get_db(connect_timeout=MODE_DB_TIMEOUT_SECONDS) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = 2000")
+                    cur.execute("SELECT mode FROM betroxy_officialbot_mode WHERE singleton=1")
+                    row = cur.fetchone()
+            value = _row_mode(row) if row else ""
+            if value not in {"quiz", "full"}:
+                raise RuntimeError("BETROXY mode state is missing or invalid")
+        except Exception as exc:
+            if not _mode_refresh_failed:
+                _LOG.error("BETROXY_MODE_REFRESH_FAILED fallback=quiz error_type=%s", type(exc).__name__)
+            _mode = "quiz"
+            _mode_refresh_failed = True
+        else:
+            if _mode_refresh_failed:
+                _LOG.warning("BETROXY_MODE_REFRESH_RECOVERED mode=%s", value)
+            _mode = value
+            _mode_refresh_failed = False
+        _mode_checked_at = time.monotonic()
+        return _mode
 
 
 def is_quiz():
@@ -129,26 +171,37 @@ def is_quiz():
 
 def set_mode(value, admin_id):
     """Commit first, then switch the in-process routing state."""
-    global _mode
+    global _mode, _mode_checked_at, _mode_refresh_failed
     value = str(value or "").lower()
     if value not in {"quiz", "full"}:
         raise ValueError("mode must be quiz or full")
     with _lock:
         if _bot is None:
             raise RuntimeError("BETROXY mode store has not initialized")
-        with _bot.get_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """UPDATE betroxy_officialbot_mode
-                       SET mode=%s, changed_by=%s, changed_at=NOW()
-                       WHERE singleton=1 RETURNING mode""",
-                    (value, int(admin_id)),
-                )
-                row = cur.fetchone()
-                if not row or _row_mode(row) != value:
-                    raise RuntimeError("BETROXY mode update was not persisted")
-            conn.commit()
+        try:
+            with _bot.get_db(connect_timeout=MODE_DB_TIMEOUT_SECONDS) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = 2000")
+                    cur.execute(
+                        """UPDATE betroxy_officialbot_mode
+                           SET mode=%s, changed_by=%s, changed_at=NOW()
+                           WHERE singleton=1 RETURNING mode""",
+                        (value, int(admin_id)),
+                    )
+                    row = cur.fetchone()
+                    if not row or _row_mode(row) != value:
+                        raise RuntimeError("BETROXY mode update was not persisted")
+                conn.commit()
+        except Exception as exc:
+            if not _mode_refresh_failed:
+                _LOG.error("BETROXY_MODE_UPDATE_FAILED fallback=quiz error_type=%s", type(exc).__name__)
+            _mode = "quiz"
+            _mode_checked_at = time.monotonic()
+            _mode_refresh_failed = True
+            raise
         _mode = value
+        _mode_checked_at = time.monotonic()
+        _mode_refresh_failed = False
     return value
 
 
@@ -240,14 +293,14 @@ async def _reconcile_menu_buttons(telegram_bot, mode, generation):
     try:
         cursor = 0
         while True:
-            if generation != _reconcile_generation:
+            if generation != _reconcile_generation or current_mode() != mode:
                 status["state"] = "superseded"
                 return
             ids = await asyncio.to_thread(_user_id_page, cursor)
             if not ids:
                 break
             for uid in ids:
-                if generation != _reconcile_generation:
+                if generation != _reconcile_generation or current_mode() != mode:
                     status["state"] = "superseded"
                     return
                 cursor = uid

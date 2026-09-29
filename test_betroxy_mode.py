@@ -4,6 +4,7 @@ import unittest
 import asyncio
 import ast
 import html
+import importlib.util
 import json
 import sys
 import types
@@ -64,7 +65,7 @@ class FakeBot:
         self.InlineKeyboardButton = lambda text, **kwargs: (text, kwargs)
         self.InlineKeyboardMarkup = lambda rows: rows
 
-    def get_db(self):
+    def get_db(self, **_kwargs):
         return FakeConnection(self.database)
 
 
@@ -82,6 +83,53 @@ class ModeTests(unittest.TestCase):
         self.assertEqual(mode.initialize(FakeBot(database)), "quiz")
         self.assertEqual(mode.set_mode("full", 123), "full")
         self.assertEqual(database["mode"], "full")
+
+    def test_two_process_like_workers_refresh_from_shared_mode_store(self):
+        def new_worker(name):
+            spec = importlib.util.spec_from_file_location(name, Path(mode.__file__))
+            worker = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(worker)
+            return worker
+
+        database = {}
+        first, second = new_worker("betroxy_mode_worker_a"), new_worker("betroxy_mode_worker_b")
+        self.assertEqual(first.initialize(FakeBot(database)), "full")
+        self.assertEqual(second.initialize(FakeBot(database)), "full")
+
+        first.set_mode("quiz", 123)
+        second._mode_checked_at = 0.0  # Simulate its one-second TTL expiring.
+        self.assertEqual(second.current_mode(), "quiz")
+
+        second.set_mode("full", 123)
+        first._mode_checked_at = 0.0
+        self.assertEqual(first.current_mode(), "full")
+
+    def test_mode_refresh_fails_closed_and_recovers_from_db_error(self):
+        database = {}
+        fake_bot = FakeBot(database)
+        self.assertEqual(mode.initialize(fake_bot), "full")
+        mode._mode_checked_at = 0.0
+        with patch.object(fake_bot, "get_db", side_effect=OSError("database unavailable")):
+            self.assertEqual(mode.current_mode(), "quiz")
+            self.assertTrue(mode.is_quiz())
+
+        mode._mode_checked_at = 0.0
+        self.assertEqual(mode.current_mode(), "full")
+        self.assertFalse(mode.is_quiz())
+
+        database["mode"] = "unexpected"
+        mode._mode_checked_at = 0.0
+        self.assertEqual(mode.current_mode(), "quiz")
+
+    def test_mode_update_error_fails_closed_immediately(self):
+        fake_bot = FakeBot({})
+        self.assertEqual(mode.initialize(fake_bot), "full")
+        with patch.object(fake_bot, "get_db", side_effect=OSError("database unavailable")):
+            with self.assertRaises(OSError):
+                mode.set_mode("full", 123)
+            self.assertEqual(mode.current_mode(), "quiz")
+        mode._mode_checked_at = 0.0
+        self.assertEqual(mode.current_mode(), "full")
 
     def test_external_product_links_are_removed_in_quiz_mode(self):
         mode._mode = "quiz"
@@ -300,6 +348,41 @@ class ModeTests(unittest.TestCase):
         self.assertEqual(mode._reconcile_status["state"], "complete")
         self.assertEqual(mode._reconcile_status["checked"], 2)
         self.assertEqual(mode._reconcile_status["skipped"], 0)
+
+    def test_menu_refresh_stops_when_another_worker_switches_mode(self):
+        telegram = types.ModuleType("telegram")
+        telegram.MenuButtonCommands = type("MenuButtonCommands", (), {})
+        telegram.MenuButtonWebApp = lambda **kwargs: kwargs
+        telegram.WebAppInfo = lambda **kwargs: kwargs
+        verification = types.ModuleType("betroxy_universal_verification")
+        verification.is_verified = lambda uid: True
+        database = {"mode": "quiz"}
+        mode.initialize(FakeBot(database))
+        mode._reconcile_generation = 2
+        mode._reconcile_status = {
+            "mode": "quiz", "state": "running", "checked": 0,
+            "updated": 0, "skipped": 0, "failed": 0,
+        }
+
+        class TelegramBot:
+            def __init__(self):
+                self.updated = []
+
+            async def set_chat_menu_button(self, **kwargs):
+                self.updated.append(kwargs["chat_id"])
+                database["mode"] = "full"
+                mode._mode_checked_at = 0.0
+
+        api = TelegramBot()
+        with patch.dict(sys.modules, {
+            "telegram": telegram,
+            "betroxy_universal_verification": verification,
+        }), patch.object(mode, "_user_id_page", return_value=[5, 6]), patch.object(
+            mode, "MENU_REFRESH_INTERVAL_SECONDS", 0,
+        ):
+            asyncio.run(mode._reconcile_menu_buttons(api, "quiz", 2))
+        self.assertEqual(api.updated, [5])
+        self.assertEqual(mode._reconcile_status["state"], "superseded")
 
     def test_raw_business_backfill_rejection_never_falls_back_to_product_link(self):
         # Execute the actual recovery function without importing the live

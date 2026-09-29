@@ -1,6 +1,7 @@
 """Real python-telegram-bot compatibility checks without Telegram or DB I/O."""
 
 import asyncio
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -26,6 +27,7 @@ class RealPTBModeTests(unittest.TestCase):
             InlineKeyboardMarkup=InlineKeyboardMarkup,
         )
         mode._mode = "quiz"
+        mode._mode_checked_at = time.monotonic()
         mode._install_application(self.app)
 
     def tearDown(self):
