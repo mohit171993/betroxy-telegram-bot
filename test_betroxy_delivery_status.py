@@ -52,25 +52,25 @@ def load_status():
     module = importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules, modules):
         spec.loader.exec_module(module)
-    return module, bot, events
+    return module, bot, events, modules
 
 
 class DeliveryStatusTests(unittest.TestCase):
     def test_registers_admin_command_after_existing_post_init(self):
-        status, bot, events = load_status()
+        status, bot, events, _ = load_status()
         status.install()
         app = SimpleNamespace(add_handler=lambda handler: events.append(handler.name))
         asyncio.run(bot.post_init(app))
         self.assertEqual(events, ["previous", "betroxy_status"])
 
     def test_non_admin_receives_no_status_or_database_query(self):
-        status, _, _ = load_status()
+        status, _, _, _ = load_status()
         status._db_snapshot = lambda *_: self.fail("non-admin queried database")
         update = SimpleNamespace(effective_user=SimpleNamespace(id=2))
         asyncio.run(status.command(update, SimpleNamespace()))
 
     def test_status_distinguishes_workers_and_recorded_delivery(self):
-        status, _, _ = load_status()
+        status, _, _, modules = load_status()
         status._worker_alive = lambda *_: True
         snapshot = {
             "last_post": {
@@ -81,7 +81,8 @@ class DeliveryStatusTests(unittest.TestCase):
             "dm_counts": {("officialbot", "sent"): 3, ("business", "sent"): 1},
             "business_auto_reply": True,
         }
-        message = status._render(snapshot, date(2026, 9, 29), True)
+        with patch.dict(sys.modules, modules):
+            message = status._render(snapshot, date(2026, 9, 29), True)
         self.assertIn("can post YES", message)
         self.assertIn("OfficialBot 3 · Business 1 · failed 0", message)
         self.assertIn("Other proactive reminders: OFF", message)

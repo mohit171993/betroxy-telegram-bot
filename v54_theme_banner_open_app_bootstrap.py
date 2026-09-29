@@ -47,8 +47,8 @@ def configure_open_app_menu():
     except Exception:
         bot.logger.exception("V54_OPEN_APP_MENU configuration failed")
 
-configure_open_app_menu()
-bot.logger.warning("V54_THEME_BANNER_OPEN_APP active=on")
+# The global menu stays neutral; verified private chats receive the app menu.
+bot.logger.warning("V54_THEME_BANNER_OPEN_APP active=on global_menu=deferred_until_verified")
 
 if __name__ == "__main__":
     bot.main()

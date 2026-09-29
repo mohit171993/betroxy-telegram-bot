@@ -106,7 +106,7 @@ def _build_banner():
     d.text((834, 557), "What would you like to do?", font=_font(16), fill=(58, 70, 66))
 
     # Bottom clean footer.
-    d.text((80, 670), "18+  •  PLAY RESPONSIBLY", font=_font(18, True), fill=muted)
+    d.text((80, 670), "ACCOUNT ACCESS & SUPPORT", font=_font(18, True), fill=muted)
     d.text((940, 670), "BETROXY", font=_font(20, True), fill=green)
 
     img.save(BANNER_PATH, "JPEG", quality=90, optimize=True)

@@ -7,6 +7,7 @@ import time
 import requests
 
 import bot
+import betroxy_universal_verification as access
 from telegram.ext import ApplicationHandlerStop
 import v85_silent_business_inbox as v85
 
@@ -93,7 +94,10 @@ async def business_message_update_with_menu_reply(update, context):
 
     if should_attempt:
         try:
-            enquiry = await biz51._send_smart_reply(context, enquiry, intent)
+            if access.is_verified(getattr(sender, "id", None)):
+                enquiry = await biz51._send_smart_reply(context, enquiry, intent)
+            else:
+                enquiry = await access.neutral_business_reply(context, enquiry, intent, v49, biz51)
             auto_replied = True
             if is_new_enquiry:
                 bot.logger.warning(
@@ -150,6 +154,9 @@ async def business_message_update_with_menu_reply(update, context):
 
 def _direct_business_send(enquiry):
     """Send the same safe first-reply payload without needing the PTB context."""
+    if not access.is_verified(enquiry.get("customer_user_id")):
+        bot.logger.warning("BUSINESS_DM_BACKFILL_SKIPPED reason=verification_required")
+        return None
     intent = biz51._detect_intent(str(enquiry.get("last_message_text") or ""))
     text, keyboard, stage = biz51._reply_payload(intent, first_reply=True)
     markup = keyboard.to_dict() if keyboard else None
@@ -260,6 +267,8 @@ def _backfill_recent_customer():
             return
 
         message_id = _direct_business_send(enquiry)
+        if message_id is None:
+            return
         _mark_recovery_done(recovery_key, enquiry["id"], message_id)
         bot.logger.warning(
             "BUSINESS_DM_BACKFILL_V2 sent=on enquiry_id=%s chat_id=%s message_id=%s stale_ack_ignored=on",
