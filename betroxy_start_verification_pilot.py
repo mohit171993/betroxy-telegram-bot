@@ -183,4 +183,3 @@ def attach(ui, verifier=None):
     ui.register = register
     ui._start_verification_pilot = pilot
     return pilot
-

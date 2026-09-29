@@ -713,4 +713,3 @@ def install(production, compact_menu):
     review._render_review = render_review
     _installed = True
     bot.logger.warning("BETROXY_MODE_READY mode=%s scope=OfficialBot ads=unchanged", _mode)
-
