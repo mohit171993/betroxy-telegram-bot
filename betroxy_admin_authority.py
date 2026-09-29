@@ -9,7 +9,6 @@ import betroxy_crm_ui
 import betroxy_verification_revocation
 import betroxy_universal_verification
 import betroxy_delivery_status
-import betroxy_hi_probe
 import betroxy_start_verification_pilot
 import welcome_no_banner_overlay
 import betroxy_admin_alert_parity
@@ -24,5 +23,4 @@ if __name__ == "__main__":
     betroxy_admin_alert_parity.prepare(prior.production, store)
     batraxy_transparent_landing.prepare(prior.production)
     betroxy_delivery_status.install()
-    betroxy_hi_probe.install(prior.production.bot)
     prior.production.main()
