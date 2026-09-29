@@ -61,13 +61,25 @@ async def neutral_business_reply(context, enquiry, intent, inbox, conversion):
 
 def _keyboard():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("📱 VERIFY & CONTINUE", request_contact=True)]],
+        [[KeyboardButton("📱 VERIFY & CONTINUE", request_contact=True, api_kwargs={"style": "primary"})]],
         resize_keyboard=True,
         one_time_keyboard=False,
         is_persistent=True,
         input_field_placeholder="Tap VERIFY & CONTINUE",
     )
 
+
+def _quick_keyboard():
+    """Persistent actions shown only after Telegram contact verification."""
+    return ReplyKeyboardMarkup(
+        [[
+            KeyboardButton("▶️ START", api_kwargs={"style": "primary"}),
+            KeyboardButton("⚡ OPEN BETROXY", web_app=WebAppInfo(url=_bot.APP_URL), api_kwargs={"style": "success"}),
+        ]],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Tap START or open BETROXY",
+    )
 
 PROMPT = (
     "To continue, verify your Telegram account. Tap 📱 VERIFY & CONTINUE below to share "
@@ -97,6 +109,12 @@ async def _message(update, context):
     uid = int(user.id)
     if is_verified(uid):
         await _verified_menu(context, uid)
+        if not context.user_data.get("btx_verified_keyboard_ready"):
+            await message.reply_text("✅ Your quick access buttons are ready below.", reply_markup=_quick_keyboard())
+            context.user_data["btx_verified_keyboard_ready"] = True
+        if str(message.text or "").strip().upper() == "▶️ START":
+            await _bot.start(update, context)
+            raise ApplicationHandlerStop
         return
 
     words = str(message.text or "").split(None, 1)
@@ -126,9 +144,10 @@ async def _message(update, context):
                 raise ApplicationHandlerStop
             await _verified_menu(context, uid)
             await message.reply_text(
-                "Account verified. Send /start to continue.",
-                reply_markup=ReplyKeyboardRemove(),
+                "✅ Account verified. Use START or OPEN BETROXY below.",
+                reply_markup=_quick_keyboard(),
             )
+            context.user_data["btx_verified_keyboard_ready"] = True
             LOGGER.warning("BTX_ACCOUNT_VERIFY_COMPLETED uid=%s method=telegram_self_contact", uid)
             raise ApplicationHandlerStop
 
