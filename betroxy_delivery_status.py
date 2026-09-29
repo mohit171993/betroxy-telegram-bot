@@ -13,10 +13,6 @@ from zoneinfo import ZoneInfo
 from telegram.ext import CommandHandler
 
 import bot
-import business_dm_reply_fix
-import daily_quiz_alerts
-import daily_quiz_schedule
-import v49_telegram_business_inbox_bootstrap as business_inbox
 
 
 LOGGER = logging.getLogger(__name__)
@@ -28,6 +24,7 @@ _installed = False
 
 
 def _db_snapshot(day):
+    import daily_quiz_alerts
     snapshot = {
         "last_post": None, "dm_counts": {}, "business_auto_reply": None,
         "membership_audit": None,
@@ -80,6 +77,7 @@ def _worker_alive(name):
 
 
 async def _channel_permission(context):
+    import daily_quiz_alerts
     try:
         me = await asyncio.wait_for(context.bot.get_me(), timeout=5)
         member = await asyncio.wait_for(
@@ -96,6 +94,10 @@ async def _channel_permission(context):
 
 
 def _render(snapshot, day, permission):
+    import business_dm_reply_fix
+    import daily_quiz_alerts
+    import daily_quiz_schedule
+    import v49_telegram_business_inbox_bootstrap as business_inbox
     channel_worker = _worker_alive("betroxy-public-channel-schedule")
     result_worker = _worker_alive("betroxy-daily-quiz-schedule")
     dm_worker = _worker_alive("betroxy-daily-quiz-alerts")
