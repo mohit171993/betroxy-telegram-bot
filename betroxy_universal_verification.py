@@ -102,11 +102,56 @@ async def _verified_menu(context, uid):
         LOGGER.exception("BTX_VERIFIED_MENU_UNAVAILABLE uid=%s", uid)
 
 
+TEST_REVERIFY_USER_ID = 1456774567
+
+
+def reset_test_verification_on_start(uid):
+    """Reopen verification for one test account without deleting its CRM history."""
+    if int(uid or 0) != TEST_REVERIFY_USER_ID:
+        return 0
+    with _bot.get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout='5s'")
+            cur.execute("SELECT pg_advisory_xact_lock(290926, 2)")
+            cur.execute(
+                "DELETE FROM v110_mobile_verifications WHERE telegram_user_id=%s",
+                (TEST_REVERIFY_USER_ID,),
+            )
+            revoked = int(cur.rowcount or 0)
+            cur.execute(
+                "DELETE FROM btx_crm_verification_tests WHERE telegram_user_id=%s",
+                (TEST_REVERIFY_USER_ID,),
+            )
+            cur.execute("SELECT to_regclass('public.btx_admin_alert_log') AS alert_table")
+            if (cur.fetchone() or {}).get("alert_table"):
+                cur.execute(
+                    "DELETE FROM btx_admin_alert_log WHERE event_key=%s",
+                    (f"verified:{TEST_REVERIFY_USER_ID}",),
+                )
+        conn.commit()
+    LOGGER.info("BTX_TEST_VERIFICATION_RESET_ON_START uid=%s revoked=%s", TEST_REVERIFY_USER_ID, revoked)
+    return revoked
+
+
 async def _message(update, context):
     user, chat, message = update.effective_user, update.effective_chat, update.effective_message
     if not user or not chat or not message or str(chat.type) != "private":
         return
     uid = int(user.id)
+    words = str(message.text or "").split(None, 1)
+    command = words[0].split("@", 1)[0].lower() if words else ""
+    if uid == TEST_REVERIFY_USER_ID and command == "/start":
+        try:
+            await asyncio.to_thread(reset_test_verification_on_start, uid)
+        except Exception:
+            LOGGER.exception("BTX_TEST_VERIFICATION_RESET_FAILED uid=%s", uid)
+            raise
+        context.user_data.pop("btx_verified_menu_ready", None)
+        context.user_data.pop("btx_verified_keyboard_ready", None)
+        try:
+            await context.bot.set_chat_menu_button(chat_id=uid, menu_button=MenuButtonCommands())
+        except Exception:
+            LOGGER.exception("BTX_TEST_VERIFICATION_MENU_RESET_FAILED uid=%s", uid)
     if is_verified(uid):
         await _verified_menu(context, uid)
         if not context.user_data.get("btx_verified_keyboard_ready"):
