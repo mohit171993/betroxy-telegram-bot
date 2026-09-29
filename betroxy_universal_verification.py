@@ -102,6 +102,23 @@ async def _verified_menu(context, uid):
         LOGGER.exception("BTX_VERIFIED_MENU_UNAVAILABLE uid=%s", uid)
 
 
+async def _open_verified_home(update, context):
+    """Show the final installed /start menu as soon as verification succeeds."""
+    previous_args = getattr(context, "args", None)
+    try:
+        # A contact update is not a deep link. Never replay stale command args.
+        context.args = []
+        await _bot.start(update, context)
+        return True
+    except Exception:
+        # Verification has already been saved; the persistent START button is a
+        # safe fallback if the menu's database or Telegram request is unavailable.
+        LOGGER.exception("BTX_VERIFIED_HOME_UNAVAILABLE uid=%s", update.effective_user.id)
+        return False
+    finally:
+        context.args = previous_args
+
+
 TEST_REVERIFY_USER_ID = 1456774567
 
 
@@ -189,11 +206,15 @@ async def _message(update, context):
                 raise ApplicationHandlerStop
             await _verified_menu(context, uid)
             await message.reply_text(
-                "✅ Account verified. Use START or OPEN BETROXY below.",
+                "✅ Account verified. Here is your menu.",
                 reply_markup=_quick_keyboard(),
             )
             context.user_data["btx_verified_keyboard_ready"] = True
-            LOGGER.warning("BTX_ACCOUNT_VERIFY_COMPLETED uid=%s method=telegram_self_contact", uid)
+            home_sent = await _open_verified_home(update, context)
+            LOGGER.warning(
+                "BTX_ACCOUNT_VERIFY_COMPLETED uid=%s method=telegram_self_contact home_sent=%s",
+                uid, home_sent,
+            )
             raise ApplicationHandlerStop
 
     await message.reply_text(PROMPT, reply_markup=_keyboard())

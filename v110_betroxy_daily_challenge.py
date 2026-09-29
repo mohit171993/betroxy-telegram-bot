@@ -13,6 +13,7 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 
 import bot
+import quiz_feedback_policy as feedback
 import v107_mobile_prompt_state_fix as v107
 
 v105 = v107.v105
@@ -594,8 +595,7 @@ async def v110_callback_handler(update, context):
         elif is_correct:
             await q.answer("Correct! ✅"); await q.message.reply_text(f"✅ <b>Correct! +{pts} points</b>", parse_mode=bot.ParseMode.HTML)
         else:
-            options = json.loads(question["options_json"]); correct_text = options[int(question["correct_option"])]
-            await q.answer("Next question"); await q.message.reply_text(f"❌ Not this time. Correct answer: <b>{html.escape(correct_text)}</b>", parse_mode=bot.ParseMode.HTML)
+            await q.answer("Next question"); await q.message.reply_text(feedback.missed_answer_feedback(), parse_mode=bot.ParseMode.HTML)
         entry = _entry_by_id(entry["id"]); nxt = _next_question(entry["id"])
         if nxt: await _send_question_to_user(uid, campaign, entry, nxt)
         else: await _finish_quiz(uid, campaign, entry)
