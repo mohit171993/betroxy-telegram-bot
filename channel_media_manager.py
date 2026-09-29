@@ -4,7 +4,7 @@ Production policy:
 - runtime creative rendering is OFF
 - the admin uploads the four final creatives once in Telegram
 - each upload is immediately re-sent by Telegram file_id for verification
-- the admin approves & locks each slot
+- the admin approves & locks each slot; one user-reviewed opening-image repair is installed once
 - scheduled channel posts reuse only the approved Telegram file_id
 - if a slot is not approved, the post safely falls back to text
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from pathlib import Path
 
 import requests
 
@@ -26,6 +27,8 @@ ASSETS = {
 }
 ASSET_ORDER = tuple(ASSETS)
 MODE_VERSION = "telegram_admin_upload_v2"
+QUIZ_OPEN_REPLACEMENT = Path(__file__).resolve().parent / "assets" / "betroxy_daily_quiz_open_v2.jpg"
+QUIZ_OPEN_MIGRATION = "quiz_open_20260929_correct_prizes"
 
 _previous_callback = None
 _previous_post_init = None
@@ -54,6 +57,12 @@ def _ensure_schema():
             """)
             cur.execute("ALTER TABLE channel_media_assets ADD COLUMN IF NOT EXISTS pending_file_unique_id TEXT")
             cur.execute("ALTER TABLE channel_media_assets ADD COLUMN IF NOT EXISTS approved_file_unique_id TEXT")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS channel_media_asset_migrations (
+                    migration_key TEXT PRIMARY KEY,
+                    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS channel_media_upload_state (
                     admin_id BIGINT PRIMARY KEY,
@@ -103,7 +112,21 @@ def _asset_row(asset_key):
             return cur.fetchone()
 
 
+def _migration_applied():
+    with bot.get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM channel_media_asset_migrations WHERE migration_key=%s",
+                (QUIZ_OPEN_MIGRATION,),
+            )
+            return cur.fetchone() is not None
+
+
 def _approved_file_id(asset_key):
+    # The old approved opening photo was a results graphic with the wrong prize.
+    # Use a text post until the reviewed replacement is installed.
+    if asset_key == "quiz_open" and not _migration_applied():
+        return None
     row = _asset_row(asset_key) or {}
     if str(row.get("status") or "") != "approved":
         return None
@@ -112,14 +135,7 @@ def _approved_file_id(asset_key):
 
 
 def _approved_count():
-    with bot.get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT COUNT(*) AS n FROM channel_media_assets WHERE source_sha=%s AND status='approved' AND approved_file_id IS NOT NULL",
-                (MODE_VERSION,),
-            )
-            row = cur.fetchone() or {}
-            return int(row.get("n") or 0)
+    return sum(bool(_approved_file_id(key)) for key in ASSET_ORDER)
 
 
 def _first_missing():
@@ -164,6 +180,116 @@ def _api(method: str, *, data=None, files=None, timeout=25):
     except Exception:
         payload = {}
     return bool(r.ok and payload.get("ok")), payload
+
+
+def _repair_existing_open_post(file_id):
+    """Correct the already-published 29 Sep opening photo when possible."""
+    try:
+        import public_quiz_channel_schedule as public_schedule
+
+        media = {
+            "type": "photo",
+            "media": file_id,
+            "caption": public_schedule._message("open"),
+            "parse_mode": "HTML",
+        }
+        ok, payload = _api(
+            "editMessageMedia",
+            data={
+                "chat_id": str(_v110.CHANNEL_CHAT),
+                "message_id": "241",
+                "media": json.dumps(media, separators=(",", ":")),
+                "reply_markup": json.dumps(
+                    {"inline_keyboard": public_schedule._button()},
+                    separators=(",", ":"),
+                ),
+            },
+        )
+        if ok:
+            bot.logger.warning("CHANNEL_MEDIA_OPEN_POST_REPAIRED message_id=241")
+        else:
+            bot.logger.warning(
+                "CHANNEL_MEDIA_OPEN_POST_REPAIR_FAILED message_id=241 detail=%s",
+                (payload or {}).get("description") if isinstance(payload, dict) else payload,
+            )
+    except Exception:
+        bot.logger.exception("CHANNEL_MEDIA_OPEN_POST_REPAIR_FAILED message_id=241")
+
+
+def _replace_bad_quiz_open_asset():
+    """Install the reviewed static photo once; future posts reuse its Telegram file_id."""
+    if _migration_applied():
+        return True
+    row = _asset_row("quiz_open") or {}
+    old_file_id = str(row.get("approved_file_id") or "").strip()
+    if not old_file_id:
+        # A fresh installation has no bad photo to replace. Keep the normal
+        # admin upload flow available for that slot.
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO channel_media_asset_migrations(migration_key) VALUES (%s) "
+                    "ON CONFLICT (migration_key) DO NOTHING",
+                    (QUIZ_OPEN_MIGRATION,),
+                )
+            conn.commit()
+        return True
+    try:
+        with QUIZ_OPEN_REPLACEMENT.open("rb") as image:
+            ok, payload = _api(
+                "sendPhoto",
+                data={
+                    "chat_id": str(bot.ADMIN_ID),
+                    "caption": "Corrected BETROXY Daily Quiz opening banner: ₹500 / ₹300 / ₹200.",
+                },
+                files={
+                    "photo": (QUIZ_OPEN_REPLACEMENT.name, image, "image/jpeg"),
+                },
+                timeout=35,
+            )
+        if not ok:
+            raise RuntimeError(
+                "Telegram photo upload failed: "
+                + str((payload or {}).get("description") if isinstance(payload, dict) else payload)[:180]
+            )
+        photos = ((payload.get("result") or {}).get("photo") or [])
+        photo = photos[-1] if photos else {}
+        file_id = str(photo.get("file_id") or "").strip()
+        unique_id = str(photo.get("file_unique_id") or "").strip()
+        if not file_id or not unique_id:
+            raise RuntimeError("Telegram upload returned no reusable photo ID")
+
+        with bot.get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE channel_media_assets
+                    SET approved_file_id=%s, approved_file_unique_id=%s,
+                        pending_file_id=NULL, pending_file_unique_id=NULL,
+                        preview_message_id=NULL, status='approved',
+                        approved_by=%s, approved_at=NOW(), updated_at=NOW()
+                    WHERE asset_key='quiz_open' AND approved_file_id=%s
+                    """,
+                    (file_id, unique_id, int(bot.ADMIN_ID), old_file_id),
+                )
+                if cur.rowcount != 1:
+                    conn.rollback()
+                    bot.logger.warning("CHANNEL_MEDIA_OPEN_REPLACEMENT skipped=slot_changed")
+                    return False
+                cur.execute(
+                    """
+                    INSERT INTO channel_media_asset_migrations(migration_key)
+                    VALUES (%s) ON CONFLICT (migration_key) DO NOTHING
+                    """,
+                    (QUIZ_OPEN_MIGRATION,),
+                )
+            conn.commit()
+        bot.logger.warning("CHANNEL_MEDIA_OPEN_REPLACED approved=on photo_unique_id=%s", unique_id)
+        _repair_existing_open_post(file_id)
+        return True
+    except Exception:
+        bot.logger.exception("CHANNEL_MEDIA_OPEN_REPLACEMENT_FAILED")
+        return False
 
 
 def _approval_markup(asset_key):
@@ -323,6 +449,7 @@ def _check_channel_permission():
 def _send_setup_notice():
     time.sleep(7)
     try:
+        _replace_bad_quiz_open_asset()
         count = _approved_count()
         if count >= 4:
             bot.logger.warning("CHANNEL_MEDIA_READY approved=4/4 runtime_renderer=off")
