@@ -107,9 +107,18 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
         self.gate = load_gate()
         self.verifier = Verifier()
         self.gate._verifier = self.verifier
-        self.gate._bot = SimpleNamespace(APP_URL="https://betroxy.com", BOT_USERNAME="BetroxyBot")
+        self.home_calls = []
+        self.gate._bot = SimpleNamespace(
+            APP_URL="https://betroxy.com", BOT_USERNAME="BetroxyBot", start=self._start,
+        )
+        # The pinned test account's database reset has its own test module.
+        self.gate.reset_test_verification_on_start = lambda _uid: 0
         self.bot = FakeBot()
-        self.context = SimpleNamespace(bot=self.bot, user_data={})
+        self.context = SimpleNamespace(bot=self.bot, user_data={}, args=["stale"])
+
+    async def _start(self, update, context):
+        self.home_calls.append((update.effective_user.id, list(context.args)))
+        await update.effective_message.reply_text("Verified customer menu")
 
     def test_revoked_admin_start_and_old_button_are_gated_with_neutral_copy(self):
         msg = FakeMessage("/start")
@@ -140,7 +149,7 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
                 self.assertIn("VERIFY & CONTINUE", msg.replies[0][0])
 
     def test_only_self_contact_unlocks_existing_routes(self):
-        uid = 1456774567
+        uid = 1456774568
         wrong = FakeMessage(contact=SimpleNamespace(user_id=2, phone_number="+919876543210"))
         with self.assertRaises(StopProcessing):
             asyncio.run(self.gate._message(update(uid, wrong), self.context))
@@ -150,9 +159,27 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
             asyncio.run(self.gate._message(update(uid, own), self.context))
         self.assertEqual(self.gate.is_verified(uid), True)
         self.assertEqual(len(self.bot.menus), 1)
+        self.assertEqual(self.home_calls, [(uid, [])])
+        self.assertEqual(self.context.args, ["stale"])
+        self.assertIn("Verified customer menu", [text for text, _ in own.replies])
+        self.assertNotIn("Send /start", " ".join(text for text, _ in own.replies))
         start = FakeMessage("/start")
         asyncio.run(self.gate._message(update(uid, start), self.context))
         self.assertEqual(start.replies, [])
+
+    def test_verified_home_failure_keeps_saved_contact_and_quick_access(self):
+        async def failed_home(_update, _context):
+            raise RuntimeError("temporary menu failure")
+
+        self.gate._bot.start = failed_home
+        uid = 1456774568
+        own = FakeMessage(contact=SimpleNamespace(user_id=uid, phone_number="+919876543210"))
+        with patch.object(self.gate.LOGGER, "exception"):
+            with self.assertRaises(StopProcessing):
+                asyncio.run(self.gate._message(update(uid, own), self.context))
+        self.assertTrue(self.gate.is_verified(uid))
+        self.assertTrue(self.context.user_data["btx_verified_keyboard_ready"])
+        self.assertIn("Account verified", own.replies[-1][0])
 
     def test_business_reply_uses_only_verification_link(self):
         inbox = SimpleNamespace(_mark_auto_ack=lambda *_: None, _record_outbound=lambda *_: None)

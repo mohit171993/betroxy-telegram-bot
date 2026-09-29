@@ -278,6 +278,13 @@ def main():
     daily_opening_guard = importlib.import_module("daily_quiz_opening_guard")
     daily_opening_guard.install(v110, quiz, compact_menu)
 
+    # Optional, on-demand warm-up uses its own questions and in-memory session.
+    # It does not touch the official Daily/Sunday entries, ranks, or rewards.
+    practice_quiz = importlib.import_module("betroxy_practice_quiz")
+    practice_quiz.install(compact_menu)
+    answer_review = importlib.import_module("betroxy_answer_review")
+    answer_review.install(compact_menu, globals())
+
     threading.Thread(target=v83._worker_loop, name="betroxy-engagement-worker", daemon=True).start()
     threading.Thread(target=daily_schedule.schedule_worker, name="betroxy-daily-quiz-schedule", daemon=True).start()
     threading.Thread(target=quiz_alerts.alert_worker, name="betroxy-daily-quiz-alerts", daemon=True).start()

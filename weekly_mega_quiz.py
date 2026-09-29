@@ -25,6 +25,7 @@ import time
 from datetime import date, datetime, time as dtime, timedelta, timezone
 
 import bot
+import quiz_feedback_policy as feedback
 import daily_quiz_question_bank as bank
 import daily_quiz_schedule as daily_schedule
 import v113_text_quiz_ux as quiz
@@ -913,10 +914,8 @@ def install():
                 await q.answer("Correct! ✅")
                 reaction = "🔥 <b>Correct!</b>"
             else:
-                options = json.loads(question["options_json"])
-                correct_text = options[int(question["correct_option"])]
                 await q.answer("Keep going")
-                reaction = f"🎯 <b>Correct answer:</b> {html.escape(correct_text)}"
+                reaction = feedback.missed_answer_feedback()
             reaction += f"\nScore so far: <b>{int(fresh.get('correct_count') or 0)}/{seq}</b>"
             await q.message.reply_text(reaction, parse_mode=bot.ParseMode.HTML)
             nxt = _next_question(fresh["id"])

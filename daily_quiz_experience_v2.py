@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 import bot
 import daily_quiz_question_bank as bank
+import quiz_feedback_policy as feedback
 
 IST_OFFSET_HOURS = 5.5
 
@@ -322,10 +323,8 @@ def install(v110, quiz, daily_schedule, production_globals):
             if remaining:
                 reaction += f"\n{remaining} question{'s' if remaining != 1 else ''} remain."
         else:
-            options = json.loads(question["options_json"])
-            correct_text = options[int(question["correct_option"])]
             await q.answer("Keep going")
-            reaction = f"🎯 <b>Close one.</b> Correct answer: <b>{html.escape(correct_text)}</b>"
+            reaction = feedback.missed_answer_feedback()
             if remaining:
                 reaction += f"\n{remaining} question{'s' if remaining != 1 else ''} remain — the leaderboard can still change."
         if seq == 4:
