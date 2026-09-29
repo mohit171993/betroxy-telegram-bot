@@ -609,4 +609,3 @@ channel_media_manager.install(v110, schedule)
 # Admin-only private end-to-end media test. Never posts to the public channel.
 import channel_media_private_test as channel_media_private_test
 channel_media_private_test.install()
-
