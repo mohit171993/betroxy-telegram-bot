@@ -20,6 +20,12 @@ try:
 except Exception:
     production.bot.logger.exception("BETROXY_CHANNEL_CTA_AUTHORITY_PATCH_FAILED")
 
+# The daily, read-only membership audit must query the same channel as posts.
+# Its old handle caused every known-user membership check to fail.
+import channel_membership_tracker as membership_tracker
+membership_tracker.CHANNEL_HANDLE = CORRECT_CHANNEL
+membership_tracker.CHANNEL_URL = CORRECT_CHANNEL_URL
+
 # Additive admin reward-screen correction: once an eligible award is already
 # delivered, remove the stale Approve & Issue button and show completion state.
 # The locked daily_quiz_admin_rewards.py file itself is not modified.
