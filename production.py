@@ -298,8 +298,6 @@ def main():
         "daily_schedule_enabled=%s auto_rewards=%s result_channel=%s",
         daily_schedule.SCHEDULE_ENABLED, daily_schedule.AUTO_REWARDS_ENABLED, daily_schedule.RESULT_CHANNEL_ENABLED,
     )
-    import betroxy_delivery_status
-    betroxy_delivery_status.install()
     time.sleep(12)
     bot.main()
 
