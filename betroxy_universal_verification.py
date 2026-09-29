@@ -200,4 +200,3 @@ def install(bot_module, verifier):
 
         safe_reminder_delivery.send_claimed_result = verified_send
         _outbound_installed = True
-
