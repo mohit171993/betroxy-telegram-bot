@@ -24,4 +24,3 @@ if __name__ == "__main__":
     batraxy_transparent_landing.prepare(prior.production)
     betroxy_delivery_status.install()
     prior.production.main()
-
