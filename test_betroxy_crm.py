@@ -65,7 +65,7 @@ class LogicTests(unittest.TestCase):
         self.assertEqual(csv_cell('Normal name'),'Normal name')
     def test_followup_timezone_and_validation(self):
         d=parse_followup('2026-09-23 12:00',NOW)
-        self.assertEqual(d.hour,8)
+        self.assertEqual((d.hour, d.minute), (6, 30))
         with self.assertRaises(ValueError):parse_followup('2026-09-20 12:00',NOW)
     def test_status_dnc_not_actionable(self):
         p=merge_records(fixture(),[{'telegram_user_id':1,'status':'dnc','next_followup_at':NOW-timedelta(hours=1)}])
