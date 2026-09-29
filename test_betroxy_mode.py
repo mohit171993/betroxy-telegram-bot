@@ -111,6 +111,12 @@ class ModeTests(unittest.TestCase):
         self.assertIsNone(mode.clean_quiz_text("Live odds are available now."))
         self.assertIsNone(mode.clean_quiz_text("Explore BETROXY now."))
         self.assertIsNone(mode.clean_quiz_text("Open https://betroxy.com"))
+        self.assertIsNone(mode.clean_quiz_text("Visit betroxy.com after the quiz."))
+        self.assertIsNone(mode.clean_quiz_text("Visit shop.betroxy.com after the quiz."))
+        self.assertIsNone(mode.clean_quiz_text("Visit batraxy.com after the quiz."))
+        self.assertIsNone(mode.clean_quiz_text("Follow @BetroxyBot for more."))
+        self.assertIsNone(mode.clean_quiz_text("Find BetroxyBot after the quiz."))
+        self.assertIsNone(mode.clean_quiz_text("Open t.me/BetroxyBot for more."))
         self.assertEqual(
             mode.clean_quiz_text("https://t.me/BetroxyOfficialBot?start=dailyquiz"),
             "https://t.me/BetroxyOfficialBot?start=dailyquiz",
@@ -140,6 +146,7 @@ class ModeTests(unittest.TestCase):
         self.assertIn("https://giftport.in/claim/abc", clean)
         self.assertNotIn("My Rewards", clean)
         self.assertIsNone(mode.clean_quiz_reward_text(receipt.replace("giftport.in", "betroxy.com")))
+        self.assertIsNone(mode.clean_quiz_reward_text(receipt + " Follow @BetroxyBot"))
         self.assertIsNone(mode.clean_quiz_reward_text(receipt + " Casino bonus"))
 
     def test_mode_command_is_private_admin_only_and_persists(self):

@@ -33,6 +33,10 @@ _NON_QUIZ_WORDS = re.compile(
     re.IGNORECASE,
 )
 _URL = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
+_PRODUCT_DESTINATION = re.compile(
+    r"(?<!\w)@?betroxybot\b|(?<![\w.])(?:[a-z0-9-]+\.)*(?:betroxy|batraxy)\.com\b",
+    re.IGNORECASE,
+)
 
 
 def clean_quiz_text(value):
@@ -48,7 +52,7 @@ def clean_quiz_text(value):
         r"Free entry\s*[—–-]\s*no deposit or wager required\.?",
         "Entry is free.", text, flags=re.IGNORECASE,
     )
-    if _NON_QUIZ_WORDS.search(text):
+    if _NON_QUIZ_WORDS.search(text) or _PRODUCT_DESTINATION.search(text):
         return None
     for raw in _URL.findall(text):
         parsed = urlparse(raw.rstrip(".,;!?)"))
@@ -69,7 +73,7 @@ def clean_quiz_reward_text(value):
     text = str(value or "")
     if not text.startswith("🎉 <b>BETROXY Reward Delivered</b>"):
         return None
-    if _NON_QUIZ_WORDS.search(text):
+    if _NON_QUIZ_WORDS.search(text) or _PRODUCT_DESTINATION.search(text):
         return None
     text = re.sub(
         r" You can also find (?:it|them) later under 🎁 My Rewards\.",

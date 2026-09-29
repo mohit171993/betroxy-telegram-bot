@@ -14,9 +14,16 @@ import html
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
+import betroxy_mode
+
 IST = ZoneInfo("Asia/Kolkata")
 _installed = False
 _callback_installed = False
+
+
+def _confirmation_markup_rows(acknowledgement_row, previous_rows):
+    """Do not republish an old product button when QUIZ edits a receipt."""
+    return [acknowledgement_row] if betroxy_mode.is_quiz() else [acknowledgement_row] + previous_rows
 
 
 def prepare(admin_rewards, bot):
@@ -229,12 +236,13 @@ def prepare(admin_rewards, bot):
                     ):
                         continue
                     kept.append(row)
-                new_rows = [[
+                acknowledgement_row = [
                     bot.InlineKeyboardButton(
                         "✅ Voucher Receipt Confirmed",
                         callback_data=f"reward_received:{reward_id}",
                     )
-                ]] + kept
+                ]
+                new_rows = _confirmation_markup_rows(acknowledgement_row, kept)
                 await q.message.edit_reply_markup(
                     reply_markup=bot.InlineKeyboardMarkup(new_rows)
                 )
