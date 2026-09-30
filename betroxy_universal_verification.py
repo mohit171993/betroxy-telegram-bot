@@ -227,9 +227,9 @@ async def _profile_and_handlers(app):
         await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
         await app.bot.set_my_commands([("start", "Verify or open your account")])
         await app.bot.set_my_description(
-            "Betroxy account access and support. Verify your Telegram-linked contact in the bot to continue."
+            "🔥 Every ball. Every goal. Every moment, live.\n🏏 Super-fast cricket live line\n⚽ Live football scores and updates\n🔔 Instant alerts for wickets, goals and results\n🧠 Daily sports quiz to test your game\nTap START and never miss a moment!"
         )
-        await app.bot.set_my_short_description("Secure account access and support.")
+        await app.bot.set_my_short_description("🏏⚽ Live line, live scores, match alerts and a fun daily sports quiz!")
         LOGGER.warning("BTX_ACCOUNT_GATE_READY private_messages=on private_callbacks=on public_profile=neutral global_menu=commands")
     except Exception:
         LOGGER.exception("BTX_ACCOUNT_GATE_PROFILE_UPDATE_FAILED")
