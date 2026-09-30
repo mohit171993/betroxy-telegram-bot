@@ -74,9 +74,9 @@ class StartVerificationPilot:
             await update.effective_message.reply_text(
                 "📱 <b>Mobile verification required</b>\n\n"
                 "<b>BETROXY</b>\n"
-                "Sportsbook · Daily Quiz · Rewards\n\n"
+                "Account verification\n\n"
                 "Verify your Telegram-linked mobile to continue.\n\n"
-                "🔒 Saved for your account and rewards. Marketing preferences stay unchanged.\n"
+                "🔒 Saved for your account. Marketing preferences stay unchanged.\n"
                 "Cancel: /cancelcrm or /stop",
                 parse_mode="HTML",
                 reply_markup=keyboard(),

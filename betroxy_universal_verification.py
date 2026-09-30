@@ -8,6 +8,7 @@ import asyncio
 import inspect
 import logging
 
+import betroxy_mode
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, MenuButtonCommands, MenuButtonWebApp, ReplyKeyboardMarkup, ReplyKeyboardRemove, WebAppInfo
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, MessageHandler, filters
 
@@ -71,6 +72,13 @@ def _keyboard():
 
 def _quick_keyboard():
     """Persistent actions shown only after Telegram contact verification."""
+    if betroxy_mode.is_quiz():
+        return ReplyKeyboardMarkup(
+            [[KeyboardButton("▶️ START", api_kwargs={"style": "primary"})]],
+            resize_keyboard=True,
+            is_persistent=True,
+            input_field_placeholder="Tap START for the daily quiz",
+        )
     return ReplyKeyboardMarkup(
         [[
             KeyboardButton("▶️ START", api_kwargs={"style": "primary"}),
@@ -90,14 +98,17 @@ PROMPT = (
 
 async def _verified_menu(context, uid):
     """Give the existing app menu only to a verified private chat."""
-    if context.user_data.get("btx_verified_menu_ready"):
+    mode = betroxy_mode.current_mode()
+    if context.user_data.get("btx_verified_menu_mode") == mode:
         return
     try:
         await context.bot.set_chat_menu_button(
             chat_id=int(uid),
-            menu_button=MenuButtonWebApp(text="Open App", web_app=WebAppInfo(url=_bot.APP_URL)),
+            menu_button=(MenuButtonCommands() if mode == "quiz" else
+                         MenuButtonWebApp(text="Open App", web_app=WebAppInfo(url=_bot.APP_URL))),
         )
         context.user_data["btx_verified_menu_ready"] = True
+        context.user_data["btx_verified_menu_mode"] = mode
     except Exception:
         LOGGER.exception("BTX_VERIFIED_MENU_UNAVAILABLE uid=%s", uid)
 
@@ -165,15 +176,19 @@ async def _message(update, context):
             raise
         context.user_data.pop("btx_verified_menu_ready", None)
         context.user_data.pop("btx_verified_keyboard_ready", None)
+        context.user_data.pop("btx_verified_menu_mode", None)
+        context.user_data.pop("btx_verified_keyboard_mode", None)
         try:
             await context.bot.set_chat_menu_button(chat_id=uid, menu_button=MenuButtonCommands())
         except Exception:
             LOGGER.exception("BTX_TEST_VERIFICATION_MENU_RESET_FAILED uid=%s", uid)
     if is_verified(uid):
         await _verified_menu(context, uid)
-        if not context.user_data.get("btx_verified_keyboard_ready"):
+        mode = betroxy_mode.current_mode()
+        if context.user_data.get("btx_verified_keyboard_mode") != mode:
             await message.reply_text("✅ Your quick access buttons are ready below.", reply_markup=_quick_keyboard())
             context.user_data["btx_verified_keyboard_ready"] = True
+            context.user_data["btx_verified_keyboard_mode"] = mode
         if str(message.text or "").strip().upper() == "▶️ START":
             await _bot.start(update, context)
             raise ApplicationHandlerStop
@@ -210,6 +225,7 @@ async def _message(update, context):
                 reply_markup=_quick_keyboard(),
             )
             context.user_data["btx_verified_keyboard_ready"] = True
+            context.user_data["btx_verified_keyboard_mode"] = betroxy_mode.current_mode()
             home_sent = await _open_verified_home(update, context)
             LOGGER.warning(
                 "BTX_ACCOUNT_VERIFY_COMPLETED uid=%s method=telegram_self_contact home_sent=%s",

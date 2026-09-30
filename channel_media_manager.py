@@ -18,6 +18,7 @@ from pathlib import Path
 import requests
 
 import bot
+import betroxy_mode
 
 ASSETS = {
     "quiz_open": "10:00 AM IST — Quiz Open",
@@ -184,6 +185,8 @@ def _api(method: str, *, data=None, files=None, timeout=25):
 
 def _repair_existing_open_post(file_id):
     """Correct the already-published 29 Sep opening photo when possible."""
+    if betroxy_mode.is_quiz():
+        return
     try:
         import public_quiz_channel_schedule as public_schedule
 
@@ -386,6 +389,16 @@ def _install_channel_send_wrapper():
     def _fixed_channel_send(chat_id, text, rows=None):
         if str(chat_id) != str(_v110.CHANNEL_CHAT):
             return _original_send_text(chat_id, text, rows)
+        if betroxy_mode.is_quiz():
+            # Approved media may contain text that the caption cannot reveal.
+            # The mode wrapper above us cleans captions, but this lower layer
+            # also guards direct callers and never reuses a photo in QUIZ.
+            clean_text = betroxy_mode.clean_quiz_text(text)
+            if clean_text is None:
+                return False, {"description": "suppressed in quiz mode"}
+            return _original_send_text(
+                chat_id, clean_text, betroxy_mode.strip_external_rows(rows)
+            )
         asset_key = _classify_channel_text(text)
         if not asset_key:
             return _original_send_text(chat_id, text, rows)

@@ -120,8 +120,11 @@ THEME_UPLOAD = 40
 # DATABASE
 # ============================================================
 
-def get_db():
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+def get_db(*, connect_timeout=None):
+    options = {"row_factory": dict_row}
+    if connect_timeout is not None:
+        options["connect_timeout"] = int(connect_timeout)
+    return psycopg.connect(DATABASE_URL, **options)
 
 
 def init_db():
