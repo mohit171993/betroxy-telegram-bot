@@ -10,6 +10,7 @@ Production policy:
 """
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import time
@@ -29,6 +30,11 @@ ASSET_ORDER = tuple(ASSETS)
 MODE_VERSION = "telegram_admin_upload_v2"
 QUIZ_OPEN_REPLACEMENT = Path(__file__).resolve().parent / "assets" / "betroxy_daily_quiz_open_v2.jpg"
 QUIZ_OPEN_MIGRATION = "quiz_open_20260929_correct_prizes"
+# Committed posters for these slots take priority over saved Telegram file_ids.
+REPO_POSTERS = {
+    key: Path(__file__).resolve().parent / "channel_media" / f"{key}.jpg.b64"
+    for key in ("quiz_afternoon", "quiz_last_chance", "quiz_result")
+}
 
 _previous_callback = None
 _previous_post_init = None
@@ -366,6 +372,18 @@ def _reset_for_upload(asset_key):
         conn.commit()
 
 
+def _repo_poster_bytes(asset_key):
+    path = REPO_POSTERS.get(asset_key)
+    if not path or not path.is_file():
+        return None
+    try:
+        data = base64.b64decode(path.read_bytes())
+    except Exception:
+        bot.logger.exception("CHANNEL_MEDIA_REPO_POSTER_INVALID asset=%s", asset_key)
+        return None
+    return data if data[:3] == b"\xff\xd8\xff" else None
+
+
 def _classify_channel_text(text):
     plain = str(text or "")
     if "BETROXY DAILY CHALLENGE — FINAL RESULTS" in plain:
@@ -389,6 +407,25 @@ def _install_channel_send_wrapper():
         asset_key = _classify_channel_text(text)
         if not asset_key:
             return _original_send_text(chat_id, text, rows)
+        poster = _repo_poster_bytes(asset_key)
+        if poster:
+            data = {"chat_id": str(chat_id), "caption": str(text), "parse_mode": "HTML"}
+            if rows:
+                data["reply_markup"] = json.dumps({"inline_keyboard": rows}, separators=(",", ":"))
+            ok, payload = _api(
+                "sendPhoto",
+                data=data,
+                files={"photo": (f"{asset_key}.jpg", poster, "image/jpeg")},
+                timeout=35,
+            )
+            if ok:
+                bot.logger.warning("CHANNEL_MEDIA_POST asset=%s mode=repo_poster runtime_renderer=off", asset_key)
+                return ok, payload
+            bot.logger.error(
+                "CHANNEL_MEDIA_REPO_POSTER_FAILED asset=%s fallback=approved_file_id detail=%s",
+                asset_key,
+                (payload or {}).get("description") if isinstance(payload, dict) else payload,
+            )
         file_id = _approved_file_id(asset_key)
         if not file_id:
             bot.logger.warning(
