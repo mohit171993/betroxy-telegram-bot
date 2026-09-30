@@ -83,8 +83,10 @@ def _quick_keyboard():
     )
 
 PROMPT = (
-    "To continue, verify your Telegram account. Tap 📱 VERIFY & CONTINUE below to share "
-    "your own Telegram-linked contact. A typed number or someone else's contact "
+    "🔐 <b>To continue, verify your Telegram account.</b>\n\n"
+    "👇 Tap <b>📱 VERIFY &amp; CONTINUE</b> below to share "
+    "your own Telegram-linked contact.\n\n"
+    "⚠️ A typed number or someone else's contact "
     "cannot verify your account."
 )
 
@@ -156,7 +158,7 @@ async def _message(update, context):
     if is_verified(uid):
         await _verified_menu(context, uid)
         if not context.user_data.get("btx_verified_keyboard_ready"):
-            await message.reply_text("✅ Your quick access buttons are ready below.", reply_markup=_quick_keyboard())
+            await message.reply_text("✅ <b>Your quick access buttons are ready below.</b>", parse_mode="HTML", reply_markup=_quick_keyboard())
             context.user_data["btx_verified_keyboard_ready"] = True
         if str(message.text or "").strip().upper() == "▶️ START":
             await _bot.start(update, context)
@@ -197,7 +199,7 @@ async def _message(update, context):
             LOGGER.warning("BTX_ACCOUNT_VERIFY_COMPLETED uid=%s method=telegram_self_contact", uid)
             raise ApplicationHandlerStop
 
-    await message.reply_text(PROMPT, reply_markup=_keyboard())
+    await message.reply_text(PROMPT, parse_mode="HTML", reply_markup=_keyboard())
     LOGGER.info("BTX_ACCOUNT_VERIFY_PROMPT uid=%s route=message", uid)
     raise ApplicationHandlerStop
 
@@ -215,7 +217,7 @@ async def _callback(update, context):
         return
     await query.answer()
     if query.message:
-        await query.message.reply_text(PROMPT, reply_markup=_keyboard())
+        await query.message.reply_text(PROMPT, parse_mode="HTML", reply_markup=_keyboard())
     LOGGER.info("BTX_ACCOUNT_VERIFY_PROMPT uid=%s route=callback", uid)
     raise ApplicationHandlerStop
 

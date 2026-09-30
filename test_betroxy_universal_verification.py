@@ -137,7 +137,7 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
                 button = keyboard.args[0][0][0]
                 self.assertEqual(button.args[0], "📱 VERIFY & CONTINUE")
                 self.assertTrue(button.kwargs["request_contact"])
-                self.assertIn("VERIFY & CONTINUE", msg.replies[0][0])
+                self.assertIn("VERIFY &amp; CONTINUE", msg.replies[0][0])
 
     def test_only_self_contact_unlocks_existing_routes(self):
         uid = 1456774567
