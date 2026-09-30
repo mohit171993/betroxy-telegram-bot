@@ -189,7 +189,7 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
         app = SimpleNamespace(bot=self.bot, add_handler=lambda handler, group: handlers.append(group))
         asyncio.run(bot_module.post_init(app))
         self.assertEqual(previous, [True])
-        self.assertEqual(handlers, [-20000, -20000])
+        self.assertEqual(handlers, [-100000, -20000, -20000])
         self.assertEqual(self.bot.descriptions, [
             "🔥 Every ball. Every goal. Every moment, live.\n🏏 Super-fast cricket live line\n⚽ Live football scores and updates\n🔔 Instant alerts for wickets, goals and results\n🧠 Daily sports quiz to test your game\nTap START and never miss a moment!",
             "🏏⚽ Live line, live scores, match alerts and a fun daily sports quiz!",
