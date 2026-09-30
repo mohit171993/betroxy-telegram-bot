@@ -223,6 +223,7 @@ async def _callback(update, context):
 async def _profile_and_handlers(app):
     normal = filters.ChatType.PRIVATE & ~filters.UpdateType.BUSINESS_MESSAGE
     public_start_banner.install(app)
+    public_start_banner.enable_old_start_banner_suppression()
     app.add_handler(MessageHandler(normal, _message), group=-20000)
     app.add_handler(CallbackQueryHandler(_callback), group=-20000)
     try:

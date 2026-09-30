@@ -73,6 +73,24 @@ class PublicStartBannerTests(unittest.TestCase):
         self.assertIn("start", handler.commands)
         self.assertFalse(getattr(handler, "block", True) is False)
 
+    def test_old_start_banner_photo_is_skipped_only_for_bannered_start(self):
+        import datetime
+        from telegram import Chat, Message
+
+        psb.enable_old_start_banner_suppression()
+        psb.enable_old_start_banner_suppression()
+        self.assertTrue(Message.reply_photo._public_start_banner_patched)
+        chat = Chat(42, "private")
+        start = Message(7, datetime.datetime.now(datetime.timezone.utc), chat, text="/start x")
+        other = Message(8, datetime.datetime.now(datetime.timezone.utc), chat, text="/start")
+        asyncio.run(psb.send_public_start_banner(
+            SimpleNamespace(effective_chat=SimpleNamespace(id=42, type="private"), effective_message=start),
+            SimpleNamespace(bot=FakeBot(), args=["x"])))
+        self.assertTrue(psb.should_skip_old_banner(start))
+        self.assertFalse(psb.should_skip_old_banner(other))
+        self.assertIsNone(asyncio.run(start.reply_photo(photo="old", caption="old")))
+        psb._bannered_starts.clear()
+
 
 if __name__ == "__main__":
     unittest.main()
