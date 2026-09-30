@@ -139,34 +139,36 @@ def _checkout_html(row):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#111827">
+<meta name="theme-color" content="#161d19">
 <title>BETROXY | WhatsApp</title>
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Inter:wght@400;500;600;700;800;900&display=swap');
 *{{box-sizing:border-box}}
-html,body{{margin:0;min-height:100%;font-family:Arial,Helvetica,sans-serif;background:#f6f7f8;color:#1f2937}}
+html,body{{margin:0;min-height:100%;font-family:'Inter',Arial,Helvetica,sans-serif;background:#f7f7f7;color:#232a27}}
 body{{min-height:100vh}}
-.top{{height:78px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:center;position:relative}}
-.menu{{position:absolute;left:22px;font-size:36px;line-height:1;color:#374151}}
+.top{{height:78px;background:#fff;border-bottom:1px solid #e7e9e8;display:flex;align-items:center;justify-content:center;position:relative}}
+.menu{{position:absolute;left:22px;font-size:36px;line-height:1;color:#3f4944}}
 .wa-brand{{display:flex;align-items:center;gap:9px;font-size:28px;font-weight:800;color:#25d366}}
 .wa-icon{{width:38px;height:38px;display:block}}
 .wrap{{width:min(100%,680px);margin:0 auto;padding:54px 22px 64px;text-align:center}}
-.logo-circle{{width:210px;height:210px;border-radius:50%;margin:0 auto;display:flex;align-items:center;justify-content:center;background:#090d1d;box-shadow:0 16px 45px rgba(17,24,39,.13)}}
+.logo-circle{{width:210px;height:210px;border-radius:50%;margin:0 auto;display:flex;align-items:center;justify-content:center;background:#0e1411;box-shadow:0 16px 45px rgba(22,29,25,.13)}}
 .logo{{font-size:38px;font-weight:950;letter-spacing:-2px;color:#fff;font-style:italic}}
 .logo span{{color:#d9ff27}}
-.name{{font-size:30px;margin:34px 0 0;font-weight:500;color:#30343b}}
-.btn{{display:flex;align-items:center;justify-content:center;width:min(100%,365px);min-height:70px;margin:54px auto 0;padding:16px 26px;border-radius:40px;background:#159b8d;color:#fff;text-decoration:none;font-size:24px;font-weight:500;box-shadow:0 9px 24px rgba(21,155,141,.18);transition:.16s ease}}
+.name{{font-size:30px;margin:34px 0 0;font-weight:500;color:#343736}}
+.btn{{display:flex;align-items:center;justify-content:center;width:min(100%,365px);min-height:70px;margin:54px auto 0;padding:16px 26px;border-radius:40px;background:#169a58;color:#fff;text-decoration:none;font-size:24px;font-weight:500;box-shadow:0 9px 24px rgba(22,154,88,.18);transition:.16s ease}}
 .btn:active{{transform:scale(.985)}}
-.interested{{margin-top:86px;font-size:25px;color:#4b5563}}
-.message{{width:min(100%,520px);margin:28px auto 0;padding:22px 20px;border-top:1px solid #cfd4da;color:#8b949e;font-size:14px;line-height:1.55}}
-.footer{{background:#101c24;color:#fff;text-align:center;padding:31px 20px 38px}}
+.interested{{margin-top:86px;font-size:25px;color:#535b57}}
+.message{{width:min(100%,520px);margin:28px auto 0;padding:22px 20px;border-top:1px solid #d3d6d5;color:#919895;font-size:14px;line-height:1.55}}
+.footer{{background:#141b18;color:#fff;text-align:center;padding:31px 20px 38px}}
 .footer .mini{{color:#25d366;font-weight:800;font-size:18px}}
 .footer h3{{margin:31px 0 0;font-size:21px}}
-.legal{{margin-top:25px;color:#8aa0ad;font-size:11px}}
+.legal{{margin-top:25px;color:#95a29c;font-size:11px}}
 @media(max-width:480px){{
  .top{{height:72px}}.menu{{left:18px;font-size:33px}}.wa-brand{{font-size:25px}}.wa-icon{{width:35px;height:35px}}
  .wrap{{padding:48px 18px 58px}}.logo-circle{{width:190px;height:190px}}.logo{{font-size:34px}}
  .name{{font-size:28px}}.btn{{margin-top:48px;min-height:66px;font-size:22px}}.interested{{margin-top:76px;font-size:23px}}
 }}
+h3,.wa-brand,.logo{{font-family:'Barlow Condensed','Arial Narrow',Arial,sans-serif}}
 </style>
 </head>
 <body>

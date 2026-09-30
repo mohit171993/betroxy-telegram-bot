@@ -32,15 +32,15 @@ HTML = """<!doctype html>
     name="description"
     content="Batraxy is a transparent referral page. Continue to Betroxy registration through a clearly disclosed affiliate link."
   />
-  <style>
+  <style>@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Inter:wght@400;500;600;700;800;900&display=swap');
     :root{
-      --bg:#071018;
-      --bg2:#0d1824;
+      --bg:#0b110e;
+      --bg2:#121a16;
       --card:rgba(255,255,255,0.08);
       --card-border:rgba(255,255,255,0.12);
       --text:#f5f7fb;
-      --muted:#b9c2cf;
-      --accent:#d4af37;
+      --muted:#c0c8c4;
+      --accent:#37d486;
       --white:#ffffff;
       --shadow:0 20px 60px rgba(0,0,0,0.35);
       --radius:22px;
@@ -48,11 +48,11 @@ HTML = """<!doctype html>
     *{box-sizing:border-box}
     html,body{margin:0;padding:0}
     body{
-      font-family:Inter,Arial,Helvetica,sans-serif;
+      font-family:'Inter',Arial,Helvetica,sans-serif;
       color:var(--text);
       background:
         radial-gradient(circle at top right, rgba(37,211,102,0.14), transparent 28%),
-        radial-gradient(circle at top left, rgba(212,175,55,0.14), transparent 25%),
+        radial-gradient(circle at top left, rgba(55,212,134,0.14), transparent 25%),
         linear-gradient(180deg,var(--bg),var(--bg2));
       min-height:100vh;
     }
@@ -76,12 +76,12 @@ HTML = """<!doctype html>
     .hero-main{padding:52px 46px;position:relative;overflow:hidden}
     .hero-main::before{
       content:"";position:absolute;inset:auto -80px -80px auto;width:240px;height:240px;
-      background:radial-gradient(circle,rgba(212,175,55,0.22),transparent 70%);
+      background:radial-gradient(circle,rgba(55,212,134,0.22),transparent 70%);
       border-radius:50%;pointer-events:none
     }
     .eyebrow{
       display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;
-      font-size:13px;color:#e7eaf0;background:rgba(255,255,255,0.07);
+      font-size:13px;color:#eaedec;background:rgba(255,255,255,0.07);
       border:1px solid rgba(255,255,255,0.12);margin-bottom:18px
     }
     h1{margin:0 0 18px;font-size:56px;line-height:1.02;letter-spacing:-.03em;max-width:760px}
@@ -91,18 +91,18 @@ HTML = """<!doctype html>
     .cta-row{display:flex;gap:12px;flex-wrap:wrap}
     .cta{
       display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:17px 28px;
-      border-radius:16px;background:linear-gradient(135deg,var(--accent),#f3d46d);color:#111;
-      font-weight:800;font-size:17px;box-shadow:0 12px 30px rgba(212,175,55,.28);
+      border-radius:16px;background:linear-gradient(135deg,var(--accent),#75ebb0);color:#111;
+      font-weight:800;font-size:17px;box-shadow:0 12px 30px rgba(55,212,134,.28);
       transition:transform .18s ease,box-shadow .18s ease
     }
     .cta.telegram{
-      background:linear-gradient(135deg,#2AABEE,#168ACD);color:#fff;
-      box-shadow:0 12px 30px rgba(42,171,238,.24)
+      background:linear-gradient(135deg,#36E28C,#1CC772);color:#fff;
+      box-shadow:0 12px 30px rgba(54,226,140,.24)
     }
-    .cta:hover{transform:translateY(-2px);box-shadow:0 16px 36px rgba(212,175,55,.35)}
-    .cta.telegram:hover{box-shadow:0 16px 36px rgba(42,171,238,.34)}
-    .cta-note{margin-top:12px;color:#d8dee7;font-size:13px;line-height:1.55}
-    .hero-tagline{margin:0;color:#d8dee7;font-size:20px;line-height:1.55;max-width:620px}
+    .cta:hover{transform:translateY(-2px);box-shadow:0 16px 36px rgba(55,212,134,.35)}
+    .cta.telegram:hover{box-shadow:0 16px 36px rgba(54,226,140,.34)}
+    .cta-note{margin-top:12px;color:#dde2e0;font-size:13px;line-height:1.55}
+    .hero-tagline{margin:0;color:#dde2e0;font-size:20px;line-height:1.55;max-width:620px}
     .hero-graphic-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:28px}
     .graphic-card{
       background:rgba(255,255,255,.065);border:1px solid rgba(255,255,255,.1);
@@ -136,9 +136,9 @@ HTML = """<!doctype html>
     .feature p{margin:0;color:var(--muted);font-size:15px;line-height:1.7}
     .footer{
       margin:38px 0 28px;padding:22px 0 10px;border-top:1px solid rgba(255,255,255,.08);
-      color:#9aa6b5;font-size:13px;line-height:1.8
+      color:#a3aca8;font-size:13px;line-height:1.8
     }
-    .footer strong{color:#dbe2eb}
+    .footer strong{color:#e0e6e3}
     @media(max-width:980px){
       .hero{grid-template-columns:1fr}
       .trust-strip,.features,.hero-graphic-cards{grid-template-columns:1fr}
@@ -152,6 +152,7 @@ HTML = """<!doctype html>
       .cta-row{flex-direction:column}
       .cta{width:100%}
     }
+h1,h2,h3,.brand,.graphic-title,.hero-card-title{font-family:'Barlow Condensed','Arial Narrow',Arial,sans-serif}
   </style>
 </head>
 <body>
