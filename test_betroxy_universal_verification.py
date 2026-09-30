@@ -190,7 +190,10 @@ class BetroxyUniversalVerificationTests(unittest.TestCase):
         asyncio.run(bot_module.post_init(app))
         self.assertEqual(previous, [True])
         self.assertEqual(handlers, [-20000, -20000])
-        self.assertNotRegex(" ".join(self.bot.descriptions), re.compile(r"sports|betting|gambl|casino|odds|wager|18\+|ibetin\.com", re.I))
+        self.assertEqual(self.bot.descriptions, [
+            "🔥 Every ball. Every goal. Every moment, live.\n🏏 Super-fast cricket live line\n⚽ Live football scores and updates\n🔔 Instant alerts for wickets, goals and results\n🧠 Daily sports quiz to test your game\nTap START and never miss a moment!",
+            "🏏⚽ Live line, live scores, match alerts and a fun daily sports quiz!",
+        ])
 
 
 if __name__ == "__main__":
