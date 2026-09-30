@@ -14,8 +14,8 @@ import logging
 log = logging.getLogger(__name__)
 WELCOME_TEXT = (
     "👋 <b>Welcome to BETROXY</b>\n\n"
-    "Sportsbook • Daily &amp; Sunday Quizzes • Rewards\n\n"
-    "Choose an option below 👇"
+    "🏆 Sportsbook • Daily &amp; Sunday Quizzes • Rewards\n\n"
+    "👇 <b>Choose an option below</b>"
 )
 
 
