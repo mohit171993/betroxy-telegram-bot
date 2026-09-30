@@ -25,14 +25,15 @@ def premium_checkout_html(row):
 <meta name="theme-color" content="#020b08">
 <title>BETROXY | Official WhatsApp Access</title>
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Inter:wght@400;500;600;700;800;900&display=swap');
 *{{box-sizing:border-box}}
-html,body{{margin:0;min-height:100%;font-family:Inter,Arial,Helvetica,sans-serif;background:#020b08;color:#fff}}
+html,body{{margin:0;min-height:100%;font-family:'Inter',Arial,Helvetica,sans-serif;background:#020b08;color:#fff}}
 body{{
   min-height:100vh;
   background:
     radial-gradient(circle at 75% 8%,rgba(22,226,129,.14),transparent 28%),
     radial-gradient(circle at 10% 82%,rgba(17,181,104,.12),transparent 30%),
-    linear-gradient(160deg,#010706 0%,#03140d 48%,#010a07 100%);
+    linear-gradient(160deg,#030504 0%,#03140d 48%,#010a07 100%);
 }}
 .page{{width:min(100%,760px);margin:0 auto;min-height:100vh;position:relative;overflow:hidden}}
 .topbar{{
@@ -53,7 +54,7 @@ body{{
 .brandline{{display:flex;align-items:center;justify-content:center;gap:14px}}
 .logo{{font-size:clamp(38px,9vw,64px);font-weight:950;letter-spacing:-2px;font-style:italic;text-shadow:0 14px 45px rgba(0,0,0,.4)}}
 .logo .o{{color:#26ef93}}
-.crown{{color:#ffd928;font-size:22px;transform:translateY(-19px);margin-left:-57px}}
+.crown{{color:#43e494;font-size:22px;transform:translateY(-19px);margin-left:-57px}}
 .tag{{margin-top:5px;color:#c7d7d0;font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase}}
 .official{{
   display:inline-flex;align-items:center;gap:7px;margin-top:20px;padding:8px 12px;border-radius:999px;
@@ -87,11 +88,11 @@ body{{
 .visual{{margin-top:18px;border-radius:24px;overflow:hidden;position:relative;min-height:220px;border:1px solid rgba(37,236,143,.14);background:linear-gradient(155deg,#071b13,#04110c)}}
 .visual:before{{content:"";position:absolute;inset:0;background:radial-gradient(circle at 18% 70%,rgba(32,235,139,.24),transparent 28%),radial-gradient(circle at 78% 40%,rgba(32,235,139,.11),transparent 30%)}}
 .phone{{
-  width:190px;height:305px;border-radius:27px;background:#050b0f;border:7px solid #10181d;position:absolute;left:50%;top:40px;transform:translateX(-50%) rotate(-4deg);box-shadow:0 28px 50px rgba(0,0,0,.45);padding:18px 11px
+  width:190px;height:305px;border-radius:27px;background:#070b09;border:7px solid #121614;position:absolute;left:50%;top:40px;transform:translateX(-50%) rotate(-4deg);box-shadow:0 28px 50px rgba(0,0,0,.45);padding:18px 11px
 }}
 .phone-logo{{font-size:21px;font-weight:950;font-style:italic;margin-bottom:18px}}.phone-logo span{{color:#28ed92}}
 .phone-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}}
-.phone-grid div{{height:55px;border-radius:10px;background:#0d171b;border:1px solid rgba(255,255,255,.05);display:flex;align-items:center;justify-content:center;text-align:center;font-size:8px;color:#cdd8d3;padding:4px}}
+.phone-grid div{{height:55px;border-radius:10px;background:#101412;border:1px solid rgba(255,255,255,.05);display:flex;align-items:center;justify-content:center;text-align:center;font-size:8px;color:#cdd8d3;padding:4px}}
 .ball{{position:absolute;left:18px;bottom:22px;font-size:62px;filter:drop-shadow(0 14px 18px rgba(0,0,0,.35))}}
 .cards{{position:absolute;right:14px;bottom:24px;font-size:58px;transform:rotate(8deg);filter:drop-shadow(0 14px 18px rgba(0,0,0,.4))}}
 .footer{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:18px 15px 24px;border-top:1px solid rgba(255,255,255,.065);background:rgba(2,11,8,.82)}}
@@ -103,6 +104,7 @@ body{{
   .checkout{{padding:10px 14px 21px}}.cta{{min-height:65px;border-radius:21px}}.visual{{min-height:205px}}
   .phone{{width:170px;height:280px;top:34px}}.ball,.cards{{font-size:53px}}
 }}
+h1,.brandline,.logo{{font-family:'Barlow Condensed','Arial Narrow',Arial,sans-serif}}
 </style>
 </head>
 <body>
