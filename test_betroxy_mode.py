@@ -435,6 +435,70 @@ class ModeTests(unittest.TestCase):
         self.assertNotIn("betroxy.com", replies[1]["text"])
         self.assertIn("start=dailyquiz", replies[1]["text"])
 
+    def test_approved_channel_photo_is_text_only_in_quiz_and_photo_in_full(self):
+        # Exercise the production media wrapper without importing its DB and
+        # Telegram setup side effects. An approved image may itself carry
+        # product copy even when its caption has been sanitized.
+        source = Path(__file__).with_name("channel_media_manager.py")
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        function = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_install_channel_send_wrapper"
+        )
+        schedule = types.SimpleNamespace()
+        text_calls, api_calls = [], []
+
+        def original_send(chat_id, text, rows=None):
+            text_calls.append((chat_id, text, rows))
+            return True, {"kind": "text"}
+
+        def api(method, *, data):
+            api_calls.append((method, data))
+            return True, {"kind": "photo"}
+
+        schedule._send_text = original_send
+        namespace = {
+            "_schedule": schedule,
+            "_v110": types.SimpleNamespace(CHANNEL_CHAT="@betroxyupdates"),
+            "_classify_channel_text": lambda text: "quiz_open" if "Daily Quiz is OPEN" in text else None,
+            "_approved_file_id": lambda key: "APPROVED_PHOTO_ID",
+            "_api": api,
+            "betroxy_mode": mode,
+            "bot": types.SimpleNamespace(logger=types.SimpleNamespace(
+                warning=lambda *args: None, error=lambda *args: None,
+            )),
+            "json": json,
+        }
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), namespace)
+        namespace["_install_channel_send_wrapper"]()
+
+        rows = [
+            [{"text": "Play Quiz", "url": "https://t.me/BetroxyOfficialBot?start=dailyquiz"}],
+            [{"text": "Open app", "url": "https://betroxy.com/"}],
+        ]
+        caption = "🏆 Today's BETROXY Daily Quiz is OPEN. Free to participate — no deposit or wager required."
+        mode._mode = "quiz"
+        self.assertEqual(schedule._send_text("@betroxyupdates", caption, rows)[0], True)
+        self.assertEqual(len(text_calls), 1)
+        self.assertEqual(api_calls, [])
+        self.assertEqual(len(text_calls[0][2]), 1)
+        self.assertNotIn("deposit", text_calls[0][1].lower())
+        self.assertIn("Entry is free", text_calls[0][1])
+
+        unsafe = "🏆 Today's BETROXY Daily Quiz is OPEN. Visit the casino."
+        self.assertEqual(schedule._send_text("@betroxyupdates", unsafe, rows)[0], False)
+        self.assertEqual(len(text_calls), 1)
+        self.assertEqual(api_calls, [])
+
+        mode._mode = "full"
+        self.assertEqual(schedule._send_text("@betroxyupdates", caption, rows)[0], True)
+        self.assertEqual(len(text_calls), 1)
+        self.assertEqual(len(api_calls), 1)
+        self.assertEqual(api_calls[0][0], "sendPhoto")
+        self.assertEqual(api_calls[0][1]["photo"], "APPROVED_PHOTO_ID")
+        self.assertEqual(api_calls[0][1]["caption"], caption)
+
 
 if __name__ == "__main__":
     unittest.main()
