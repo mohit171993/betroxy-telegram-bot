@@ -16,6 +16,7 @@ from __future__ import annotations
 import html
 import json
 from datetime import datetime, time as dtime, timedelta, timezone
+from pathlib import Path
 
 import requests
 from telegram.ext import ApplicationHandlerStop
@@ -33,6 +34,12 @@ MEGA_MEDIA = {
     "mega_result": "Sunday 9:10 PM IST — Final Results / Winners",
 }
 MEGA_MEDIA_ORDER = tuple(MEGA_MEDIA)
+# Optional repo banners (assets/mega/<slot>.jpg). When present they are sent as
+# the photo; otherwise the approved mega_quiz_media_assets file_id is used.
+MEGA_REPO_BANNERS = {
+    key: Path(__file__).resolve().parent / "assets" / "mega" / f"{key}.jpg"
+    for key in MEGA_MEDIA_ORDER
+}
 DELIVERY_TO_ASSET = {
     "preview": "mega_preview",
     "open": "mega_open",
@@ -388,15 +395,62 @@ def _api_send_photo(chat_id, file_id, caption, rows=None):
         return False, {"description": str(exc)}
 
 
+def _repo_banner_bytes(key):
+    path = MEGA_REPO_BANNERS.get(str(key or ""))
+    if not path or not path.is_file():
+        return None
+    try:
+        data = path.read_bytes()
+    except Exception:
+        bot.logger.exception("MEGA_REPO_BANNER_READ_FAILED asset=%s", key)
+        return None
+    return data if data[:3] == b"\xff\xd8\xff" else None
+
+
+def _api_send_photo_bytes(chat_id, key, image, caption, rows=None):
+    data = {
+        "chat_id": str(chat_id),
+        "caption": str(caption),
+        "parse_mode": "HTML",
+    }
+    if rows:
+        data["reply_markup"] = json.dumps({"inline_keyboard": rows}, separators=(",", ":"))
+    try:
+        response = requests.post(
+            f"{_weekly.v110.TG_API}/sendPhoto",
+            data=data,
+            files={"photo": (f"{key}.jpg", image, "image/jpeg")},
+            timeout=40,
+        )
+        payload = response.json() if response.content else {}
+        return bool(response.ok and payload.get("ok")), payload
+    except Exception as exc:
+        return False, {"description": str(exc)}
+
+
+def _send_mega_banner(key, chat_id, caption, rows=None):
+    """Repo banner first, then approved DB file_id. Returns (ok, payload, mode) or None."""
+    image = _repo_banner_bytes(key) if key else None
+    if image:
+        ok, payload = _api_send_photo_bytes(chat_id, key, image, caption, rows)
+        if ok:
+            return ok, payload, "repo_banner"
+        bot.logger.warning("MEGA_REPO_BANNER_SEND_FAILED asset=%s detail=%s", key, payload)
+    file_id = _approved_file_id(key) if key else None
+    if file_id:
+        ok, payload = _api_send_photo(chat_id, file_id, caption, rows)
+        return ok, payload, "approved_telegram_file_id"
+    return None
+
+
 def _media_channel_post(campaign, delivery_type, text):
     if _weekly._delivery_exists(campaign["id"], _weekly.CHANNEL, delivery_type):
         return True
     rows = [[{"text": "🔥 Open Mega Quiz", "url": _weekly.BOT_DEEPLINK}]]
     asset_key = DELIVERY_TO_ASSET.get(str(delivery_type))
-    file_id = _approved_file_id(asset_key) if asset_key else None
-    if file_id:
-        ok, payload = _api_send_photo(_weekly.CHANNEL, file_id, text, rows)
-        mode = "approved_telegram_file_id"
+    sent = _send_mega_banner(asset_key, _weekly.CHANNEL, text, rows) if asset_key else None
+    if sent:
+        ok, payload, mode = sent
     else:
         ok, payload = _weekly.quiz._tg_send_text(_weekly.CHANNEL, text, rows)
         mode = "text_fallback"
@@ -421,10 +475,9 @@ def _media_announce_due_results():
         rows = _weekly._final_rows(campaign["id"])
         _weekly._stage_awards(campaign, rows)
         keyboard = [[{"text": "🔥 Next Mega Quiz", "url": _weekly.BOT_DEEPLINK}]]
-        file_id = _approved_file_id("mega_result")
-        if file_id:
-            ok, _ = _api_send_photo(_weekly.CHANNEL, file_id, _weekly._result_text(campaign, rows), keyboard)
-            mode = "approved_telegram_file_id"
+        sent = _send_mega_banner("mega_result", _weekly.CHANNEL, _weekly._result_text(campaign, rows), keyboard)
+        if sent:
+            ok, _, mode = sent
         else:
             ok, _ = _weekly.quiz._tg_send_text(_weekly.CHANNEL, _weekly._result_text(campaign, rows), keyboard)
             mode = "text_fallback"
