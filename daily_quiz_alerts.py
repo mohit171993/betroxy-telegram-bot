@@ -14,9 +14,15 @@ Policy:
 - delivered users are deduplicated across OfficialBot and Business routes
 - admin receives start/progress/final reports
 """
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 import hashlib
+import json
+from pathlib import Path
+import threading
 import time
+
+import requests
 
 import bot
 import daily_quiz_schedule as schedule
@@ -42,6 +48,64 @@ v83.TZ_OFFSET = INDIA_OFFSET_HOURS
 # is still OFF; this module alone can request the explicit daily-quiz Business
 # exception, which has a hard >=10 minute per-Business-route interval.
 safe_delivery.install(v83)
+
+# Daily quiz reminder DMs lead with the reminder image. The text is the caption
+# (unchanged) and the buttons are unchanged. Only sends made inside
+# _reminder_photo() use the photo; every other sender stays text-only.
+REMINDER_IMAGE = Path(__file__).resolve().parent / "assets" / "betroxy_reminder.jpg"
+CAPTION_LIMIT = 1024
+_photo_ctx = threading.local()
+_text_send = safe_delivery._original_tg_send
+
+
+def _tg_send_photo(chat_id, caption=None, keyboard=None, business_connection_id=None):
+    payload = {"chat_id": int(chat_id)}
+    if caption is not None:
+        payload["caption"] = caption
+        payload["parse_mode"] = "HTML"
+    if keyboard:
+        payload["reply_markup"] = json.dumps({"inline_keyboard": keyboard})
+    if business_connection_id:
+        payload["business_connection_id"] = str(business_connection_id)
+    try:
+        with REMINDER_IMAGE.open("rb") as photo:
+            r = requests.post(
+                f"{v83.TG_API}/sendPhoto",
+                data=payload,
+                files={"photo": (REMINDER_IMAGE.name, photo, "image/jpeg")},
+                timeout=30,
+            )
+        data = r.json() if r.content else {}
+        return bool(r.ok and data.get("ok")), data
+    except Exception as exc:
+        return False, {"description": str(exc)}
+
+
+def _reminder_send(chat_id, text, keyboard=None, business_connection_id=None):
+    if not getattr(_photo_ctx, "active", False) or not REMINDER_IMAGE.is_file():
+        return _text_send(chat_id, text, keyboard, business_connection_id=business_connection_id)
+    if len(text) <= CAPTION_LIMIT:
+        return _tg_send_photo(chat_id, text, keyboard, business_connection_id)
+    # Too long for a caption: photo first, then the unchanged text and buttons.
+    if not getattr(_photo_ctx, "photo_sent", False):
+        ok, data = _tg_send_photo(chat_id, None, None, business_connection_id)
+        if not ok:
+            return ok, data
+        _photo_ctx.photo_sent = True
+    return _text_send(chat_id, text, keyboard, business_connection_id=business_connection_id)
+
+
+@contextmanager
+def _reminder_photo():
+    _photo_ctx.active, _photo_ctx.photo_sent = True, False
+    try:
+        yield
+    finally:
+        _photo_ctx.active, _photo_ctx.photo_sent = False, False
+
+
+if _text_send is not None:
+    safe_delivery._original_tg_send = _reminder_send
 
 
 def _disabled_engagement_worker():
@@ -245,15 +309,16 @@ def _quiz_button():
 
 def _send_official(uid, message_key, target_day):
     try:
-        return safe_delivery.send_claimed_result(
-            uid,
-            "quiz_rewards",
-            message_key,
-            _message_for(target_day),
-            _quiz_button(),
-            channel="officialbot",
-            detail="single daily quiz reminder; spread queue; OfficialBot preferred",
-        )
+        with _reminder_photo():
+            return safe_delivery.send_claimed_result(
+                uid,
+                "quiz_rewards",
+                message_key,
+                _message_for(target_day),
+                _quiz_button(),
+                channel="officialbot",
+                detail="single daily quiz reminder; spread queue; OfficialBot preferred",
+            )
     except Exception:
         bot.logger.exception("DAILY_QUIZ_SAFE_DM_FAILED uid=%s key=%s", uid, message_key)
         return {
@@ -270,21 +335,22 @@ def _send_business(row, message_key, target_day):
             "permanent": False, "rate_limited": False,
         }
     try:
-        return safe_delivery.send_claimed_result(
-            uid,
-            "quiz_rewards",
-            message_key,
-            _message_for(target_day),
-            _quiz_button(),
-            chat_id=int(row["customer_chat_id"]),
-            business_connection_id=str(row["connection_id"]),
-            channel="business",
-            detail=(
-                "single daily quiz reminder via recent inbound Business DM; "
-                "explicit safety exception; one user/day"
-            ),
-            allow_business_automation=True,
-        )
+        with _reminder_photo():
+            return safe_delivery.send_claimed_result(
+                uid,
+                "quiz_rewards",
+                message_key,
+                _message_for(target_day),
+                _quiz_button(),
+                chat_id=int(row["customer_chat_id"]),
+                business_connection_id=str(row["connection_id"]),
+                channel="business",
+                detail=(
+                    "single daily quiz reminder via recent inbound Business DM; "
+                    "explicit safety exception; one user/day"
+                ),
+                allow_business_automation=True,
+            )
     except Exception:
         bot.logger.exception("DAILY_QUIZ_SAFE_BUSINESS_FAILED uid=%s key=%s", uid, message_key)
         return {
