@@ -14,6 +14,7 @@ import betroxy_start_verification_pilot
 import welcome_no_banner_overlay
 import betroxy_admin_alert_parity
 import batraxy_transparent_landing
+import betroxy_admin_home_v2
 
 if __name__ == "__main__":
     store, ui = betroxy_crm_ui.prepare(prior.production)
@@ -24,4 +25,9 @@ if __name__ == "__main__":
     betroxy_admin_alert_parity.prepare(prior.production, store)
     batraxy_transparent_landing.prepare(prior.production)
     betroxy_delivery_status.install()
+    try:
+        betroxy_admin_home_v2.prepare(prior.production, store)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("BTX_ADMIN_HOME_V2_SKIPPED classic menus stay active")
     prior.production.main()
