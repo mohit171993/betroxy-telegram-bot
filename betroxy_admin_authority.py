@@ -4,6 +4,7 @@ Core quiz and reward files remain unchanged. No startup mobile reset, SMS OTP,
 extra poller, or prize purchase is introduced.
 Rollback: restore this file from commit 1fa3afe26dbbf6f924b116aea85eb5a5061a6666.
 """
+import betroxy_extra_admins  # noqa: F401  (must load first: extends bot.is_admin)
 import reward_receipt_confirmation_authority as prior
 import betroxy_crm_ui
 import betroxy_verification_revocation
