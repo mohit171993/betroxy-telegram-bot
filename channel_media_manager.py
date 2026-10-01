@@ -526,7 +526,7 @@ def _install_admin_callback():
         data = str(getattr(q, "data", "") or "") if q else ""
         if not q or not data.startswith("channel_media:"):
             return await _previous_callback(update, context)
-        if int(q.from_user.id) != int(bot.ADMIN_ID):
+        if not bot.is_admin(q.from_user.id):
             await q.answer("Admin only", show_alert=True)
             return
 
@@ -636,7 +636,7 @@ def _install_upload_handlers():
         async def setup_command(update, context):
             user = getattr(update, "effective_user", None)
             message = getattr(update, "effective_message", None)
-            if not user or int(user.id) != int(bot.ADMIN_ID):
+            if not user or not bot.is_admin(user.id):
                 return
             requested = str(context.args[0]).strip() if getattr(context, "args", None) else ""
             aliases = {
@@ -661,7 +661,7 @@ def _install_upload_handlers():
         async def photo_upload(update, context):
             user = getattr(update, "effective_user", None)
             message = getattr(update, "effective_message", None)
-            if not user or int(user.id) != int(bot.ADMIN_ID) or not message:
+            if not user or not bot.is_admin(user.id) or not message:
                 return
             asset_key = _get_upload_state(user.id)
             if not asset_key:

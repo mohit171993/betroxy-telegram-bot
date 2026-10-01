@@ -11,7 +11,7 @@ _original_public_menu = _v53.v53_public_menu
 def _public_menu_with_admin_analytics(user_id=None):
     markup = _original_public_menu(user_id)
     rows = [list(row) for row in markup.inline_keyboard]
-    if user_id == bot.ADMIN_ID:
+    if bot.is_admin(user_id):
         exists = any(
             any(getattr(btn, "callback_data", None) == "bot_analytics" for btn in row)
             for row in rows

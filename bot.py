@@ -53,6 +53,9 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+# Owner-approved additional full admins. They get every admin right ADMIN_ID
+# has; owner alerts and admin notifications still go to ADMIN_ID only.
+EXTRA_ADMIN_IDS = frozenset({8860632140})  # @Liveline_proadmin
 TRACKER_API_SECRET = os.getenv("TRACKER_API_SECRET", "")
 APIFY_TOKEN = os.getenv("APIFY_TOKEN", "").strip()
 APIFY_PROFILE_ACTOR_ID = os.getenv("APIFY_PROFILE_ACTOR_ID", "apify~instagram-profile-scraper").strip()
@@ -903,7 +906,7 @@ def public_menu(user_id=None):
             ],
         )
 
-    if user_id == ADMIN_ID:
+    if is_admin(user_id):
         rows.insert(
             0,
             [
@@ -2562,7 +2565,11 @@ def affiliate_menu():
 # ============================================================
 
 def is_admin(user_id):
-    return user_id == ADMIN_ID
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    return uid == int(ADMIN_ID) or uid in EXTRA_ADMIN_IDS
 
 
 async def require_admin(update):

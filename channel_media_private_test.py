@@ -181,7 +181,7 @@ async def _send_slot(context, chat_id, asset_key, caption, with_play_button=True
 async def test_channel_media(update, context):
     user = getattr(update, "effective_user", None)
     message = getattr(update, "effective_message", None)
-    if not user or int(user.id) != int(bot.ADMIN_ID) or not message:
+    if not user or not bot.is_admin(user.id) or not message:
         return
 
     count = media._approved_count()
@@ -220,7 +220,7 @@ async def test_channel_media(update, context):
 async def post_10am_now(update, context):
     user = getattr(update, "effective_user", None)
     message = getattr(update, "effective_message", None)
-    if not user or int(user.id) != int(bot.ADMIN_ID) or not message:
+    if not user or not bot.is_admin(user.id) or not message:
         return
 
     ok, data = await asyncio.to_thread(_send_public_10am)

@@ -24,7 +24,7 @@ def _ensure_v84_schema():
 async def v84_start(update, context):
     result = await _previous_start(update, context)
     user = update.effective_user
-    if user and int(user.id) != int(bot.ADMIN_ID):
+    if user and not bot.is_admin(user.id):
         try:
             with bot.get_db() as conn:
                 with conn.cursor() as cur:

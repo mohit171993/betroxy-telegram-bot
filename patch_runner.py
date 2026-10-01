@@ -330,7 +330,7 @@ async def production_callback_handler(update, context):
     q = update.callback_query
     if q and q.data == "promoter_fix_report":
         await q.answer()
-        if not update.effective_user or update.effective_user.id != bot.ADMIN_ID:
+        if not update.effective_user or not bot.is_admin(update.effective_user.id):
             await q.message.reply_text("Admin only.")
             return
         pdf_file, count = build_promoter_fix_pdf()

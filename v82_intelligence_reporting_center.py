@@ -150,7 +150,7 @@ def _ensure_intelligence_tables():
 
 
 def _upsert_lead(user, source='officialbot', event='interaction', score_delta=1):
-    if not user or int(getattr(user, 'id', 0) or 0) == int(bot.ADMIN_ID):
+    if not user or bot.is_admin(int(getattr(user, 'id', 0) or 0)):
         return
     with bot.get_db() as conn:
         with conn.cursor() as cur:
@@ -177,7 +177,7 @@ def _upsert_lead(user, source='officialbot', event='interaction', score_delta=1)
 
 
 def _record_event(user, chat_id, event_type, event_name, data=None, source='officialbot'):
-    if not user or int(getattr(user, 'id', 0) or 0) == int(bot.ADMIN_ID):
+    if not user or bot.is_admin(int(getattr(user, 'id', 0) or 0)):
         return
     try:
         _upsert_lead(user, source=source, event=event_name, score_delta=5 if event_type == 'start' else 1)

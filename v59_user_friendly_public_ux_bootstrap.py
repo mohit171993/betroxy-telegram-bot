@@ -51,7 +51,7 @@ def v59_public_menu(user_id=None):
     rows = []
 
     # Keep privileged controls visible only to the users who already had them.
-    if user_id == bot.ADMIN_ID:
+    if bot.is_admin(user_id):
         rows.append([
             _btn("🛠 Admin Panel", callback_data="admin_home", style="danger")
         ])
