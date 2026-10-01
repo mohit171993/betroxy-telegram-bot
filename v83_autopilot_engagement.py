@@ -152,7 +152,7 @@ def _settings():
 
 
 def _touch_user(user_id, event="interaction"):
-    if not user_id or int(user_id) == int(bot.ADMIN_ID):
+    if not user_id or bot.is_admin(user_id):
         return
     with bot.get_db() as conn:
         with conn.cursor() as cur:
@@ -345,7 +345,7 @@ async def v83_start(update, context):
     args = list(getattr(context, "args", []) or [])
     payload = str(args[0]).lower() if args else ""
 
-    if uid and int(uid) != int(bot.ADMIN_ID):
+    if uid and not bot.is_admin(uid):
         _touch_user(uid, "bot_start")
         with bot.get_db() as conn:
             with conn.cursor() as cur:
@@ -372,7 +372,7 @@ async def v83_start(update, context):
 
 async def v83_chat_handler(update, context):
     user = update.effective_user
-    if user and int(user.id) != int(bot.ADMIN_ID):
+    if user and not bot.is_admin(user.id):
         _touch_user(user.id, "message")
         text = str(getattr(update.effective_message, "text", "") or "").strip().lower()
         if text in {"stop", "/stop", "unsubscribe", "stop updates"}:

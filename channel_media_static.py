@@ -259,7 +259,7 @@ def _install_callback():
         data = str(getattr(q, "data", "") or "") if q else ""
         if not q or not data.startswith("channel_media_test:"):
             return await _previous_callback(update, context)
-        if int(q.from_user.id) != int(bot.ADMIN_ID):
+        if not bot.is_admin(q.from_user.id):
             await q.answer("Admin only", show_alert=True)
             return
 

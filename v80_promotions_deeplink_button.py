@@ -50,7 +50,7 @@ def _official_public_menu_with_promotions(user_id=None):
 
     # Public menu normally has privileged row (admin/affiliate) optionally,
     # followed by Open App and Account/Transactions. Insert after that account row.
-    insert_at = 3 if user_id == bot.ADMIN_ID or (user_id and bot.find_agent_by_telegram_user_id(user_id)) else 2
+    insert_at = 3 if bot.is_admin(user_id) or (user_id and bot.find_agent_by_telegram_user_id(user_id)) else 2
     insert_at = min(insert_at, len(rows))
     rows.insert(insert_at, [promo_button])
     return bot.InlineKeyboardMarkup(rows)
