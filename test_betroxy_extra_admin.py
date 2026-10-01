@@ -9,6 +9,7 @@ os.environ.setdefault("ADMIN_ID", "8992664481")
 
 try:
     import bot
+    import betroxy_extra_admins  # noqa: F401
 except Exception as exc:  # pragma: no cover - optional runtime deps
     bot = None
     _IMPORT_ERROR = exc
