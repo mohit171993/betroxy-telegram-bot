@@ -199,3 +199,7 @@ class PostgresTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
+
+
+# Grouped admin home v2 tests run in the existing build step.
+from test_betroxy_admin_home_v2 import BetroxyAdminHomeV2Tests  # noqa: E402,F401
