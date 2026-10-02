@@ -232,8 +232,7 @@ def _admin_alert_keyboard(enquiry_id):
 
 
 async def _send_new_lead_alert(context, enquiry, intent, inbound_preview, auto_replied):
-    await context.bot.send_message(
-        chat_id=bot.ADMIN_ID,
+    kwargs = dict(
         text=(
             "🟢 <b>NEW BUSINESS LEAD</b>\n\n"
             f"From: <b>{html.escape(v49._customer_name(enquiry))}</b>\n"
@@ -247,6 +246,15 @@ async def _send_new_lead_alert(context, enquiry, intent, inbound_preview, auto_r
         reply_markup=_admin_alert_keyboard(enquiry["id"]),
         disable_web_page_preview=True,
     )
+    await context.bot.send_message(chat_id=bot.ADMIN_ID, **kwargs)
+    # @Liveline_proadmin and other EXTRA_ADMIN_IDS also get every new lead.
+    for extra_id in sorted(getattr(bot, "EXTRA_ADMIN_IDS", ())):
+        if int(extra_id) == int(bot.ADMIN_ID):
+            continue
+        try:
+            await context.bot.send_message(chat_id=int(extra_id), **kwargs)
+        except Exception:
+            bot.logger.exception("V85_NEW_LEAD_ALERT_EXTRA_ADMIN_FAILED chat_id=%s", extra_id)
 
 
 async def _send_attention_alert(context, enquiry, intent, inbound_preview, reason, reopened=False):

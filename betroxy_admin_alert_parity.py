@@ -45,9 +45,9 @@ def _ensure_schema():
         conn.commit()
 
 
-def _send_admin(text, keyboard=None):
+def _send_admin(text, keyboard=None, chat_id=None):
     payload = {
-        "chat_id": int(_bot.ADMIN_ID),
+        "chat_id": int(chat_id if chat_id is not None else _bot.ADMIN_ID),
         "text": str(text),
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
@@ -189,6 +189,15 @@ def _new_verified_alert(uid, mobile):
             "BTX_REFERENCE_NEW_VERIFIED_ALERT sent=on uid=%s",
             int(uid),
         )
+    # @Liveline_proadmin and other EXTRA_ADMIN_IDS also get every verified lead.
+    for extra_id in sorted(getattr(_bot, "EXTRA_ADMIN_IDS", ())):
+        if int(extra_id) == int(_bot.ADMIN_ID):
+            continue
+        if _send_admin(text, keyboard, chat_id=int(extra_id)):
+            log.warning(
+                "BTX_REFERENCE_NEW_VERIFIED_ALERT sent=on uid=%s chat_id=%s",
+                int(uid), int(extra_id),
+            )
 
 
 def _install_verification_alert():
